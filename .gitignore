@@ -1,0 +1,9 @@
+keys/
+mlruns/
+mlartifacts/
+data/records.json
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/

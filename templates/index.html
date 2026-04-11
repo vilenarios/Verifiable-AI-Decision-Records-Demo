@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verifiable AI Decision Records</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 2rem; }
+        h1 { color: #58a6ff; margin-bottom: 0.5rem; }
+        .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 0.9rem; }
+        .status-bar { display: flex; gap: 1.5rem; margin-bottom: 2rem; padding: 1rem; background: #161b22; border: 1px solid #30363d; border-radius: 6px; }
+        .status-item { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+        .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+        .dot-green { background: #3fb950; }
+        .dot-yellow { background: #d29922; }
+        .dot-red { background: #f85149; }
+        .dot-gray { background: #484f58; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1.5rem; margin-bottom: 2rem; }
+        .card h2 { color: #58a6ff; margin-bottom: 1rem; font-size: 1.1rem; }
+        .form-row { display: flex; gap: 1rem; flex-wrap: wrap; align-items: flex-end; }
+        .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
+        .form-group label { font-size: 0.8rem; color: #8b949e; }
+        .form-group input { background: #0d1117; border: 1px solid #30363d; color: #c9d1d9; padding: 0.5rem; border-radius: 4px; width: 120px; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-weight: 500; }
+        .btn-primary { background: #238636; color: #fff; }
+        .btn-primary:hover { background: #2ea043; }
+        .btn-blue { background: #1f6feb; color: #fff; }
+        .btn-blue:hover { background: #388bfd; }
+        .btn-danger { background: #da3633; color: #fff; }
+        .btn-danger:hover { background: #f85149; }
+        .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; }
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; padding: 0.75rem; border-bottom: 1px solid #30363d; color: #8b949e; font-size: 0.8rem; text-transform: uppercase; }
+        td { padding: 0.75rem; border-bottom: 1px solid #21262d; font-size: 0.85rem; }
+        tr:hover { background: #1c2128; }
+        .hash { font-family: monospace; color: #79c0ff; font-size: 0.8rem; }
+        .badge { padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.75rem; font-weight: 500; }
+        .badge-green { background: #238636; color: #fff; }
+        .badge-red { background: #da3633; color: #fff; }
+        .badge-yellow { background: #9e6a03; color: #fff; }
+        .badge-gray { background: #30363d; color: #8b949e; }
+        a { color: #58a6ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .actions { display: flex; gap: 0.5rem; }
+        .empty { text-align: center; padding: 3rem; color: #484f58; }
+    </style>
+</head>
+<body>
+    <h1>Verifiable AI Decision Records</h1>
+    <p class="subtitle">Tamper-evident AI audit trail anchored to Arweave</p>
+
+    <div class="status-bar">
+        <div class="status-item">
+            <span class="dot dot-green"></span> MLflow Model: {{ model_info.model_name }}/v{{ model_info.model_version }}
+        </div>
+        <div class="status-item">
+            <span class="dot dot-green"></span> OpenTelemetry: Active
+        </div>
+        <div class="status-item">
+            <span class="dot {{ 'dot-green' if arweave_enabled else 'dot-gray' }}"></span>
+            Arweave: {{ 'Connected' if arweave_enabled else 'No Wallet' }}
+        </div>
+        <div class="status-item">
+            <span class="dot {{ 'dot-green' if ario_verify_enabled else 'dot-gray' }}"></span>
+            AR.IO Verify: {{ 'Connected' if ario_verify_enabled else 'Unavailable' }}
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Submit Prediction</h2>
+        <form action="/predict-form" method="POST">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Sepal Length</label>
+                    <input type="number" name="sepal_length" value="5.1" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>Sepal Width</label>
+                    <input type="number" name="sepal_width" value="3.5" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>Petal Length</label>
+                    <input type="number" name="petal_length" value="1.4" step="0.1" required>
+                </div>
+                <div class="form-group">
+                    <label>Petal Width</label>
+                    <input type="number" name="petal_width" value="0.2" step="0.1" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Predict & Record</button>
+            </div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h2>Decision Records ({{ records|length }})</h2>
+        {% if records %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Decision ID</th>
+                    <th>Timestamp</th>
+                    <th>Prediction</th>
+                    <th>Record Hash</th>
+                    <th>Arweave TX</th>
+                    <th>Verify Level</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for env in records|reverse %}
+                <tr>
+                    <td><a href="/ui/decisions/{{ env.record.decision_id }}">{{ env.record.decision_id[:8] }}...</a></td>
+                    <td>{{ env.record.timestamp[:19] }}</td>
+                    <td>{{ env.record.prediction['class'] if env.record.prediction is defined else 'N/A' }}</td>
+                    <td><span class="hash">{{ env.record_hash[:16] }}...</span></td>
+                    <td>
+                        {% if env.arweave_tx_id %}
+                            <a href="{{ env.arweave_url }}" target="_blank">{{ env.arweave_tx_id[:12] }}...</a>
+                        {% else %}
+                            <span class="badge badge-gray">None</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if env.get('tampered') %}
+                            <span class="badge badge-red">Tampered</span>
+                        {% elif env.ario_verify_level == 3 %}
+                            <span class="badge badge-green">Level 3</span>
+                        {% elif env.ario_verify_level == 2 %}
+                            <span class="badge badge-yellow">Level 2</span>
+                        {% elif env.ario_verify_level == 1 %}
+                            <span class="badge badge-yellow">Pending</span>
+                        {% else %}
+                            <span class="badge badge-gray">Local Only</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <div class="actions">
+                            <a href="/ui/decisions/{{ env.record.decision_id }}" class="btn btn-blue btn-sm">Detail</a>
+                            <form action="/verify/{{ env.record.decision_id }}" method="POST" style="display:inline;">
+                                <button type="submit" class="btn btn-primary btn-sm">Verify</button>
+                            </form>
+                            {% if not env.get('tampered') %}
+                            <form action="/tamper/{{ env.record.decision_id }}" method="POST" style="display:inline;">
+                                <button type="submit" class="btn btn-danger btn-sm">Tamper</button>
+                            </form>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty">
+            <p>No decisions yet. Submit a prediction to get started.</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>

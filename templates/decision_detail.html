@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Decision {{ envelope.record.decision_id[:8] }} — Verifiable AI</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace; background: #0d1117; color: #c9d1d9; padding: 2rem; }
+        h1 { color: #58a6ff; margin-bottom: 0.5rem; font-size: 1.3rem; }
+        .back { color: #58a6ff; text-decoration: none; font-size: 0.9rem; display: inline-block; margin-bottom: 1rem; }
+        .back:hover { text-decoration: underline; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1.5rem; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 1.5rem; }
+        .card-full { grid-column: 1 / -1; }
+        .card h2 { color: #58a6ff; margin-bottom: 1rem; font-size: 1rem; border-bottom: 1px solid #21262d; padding-bottom: 0.5rem; }
+        .card-danger { border-color: #f85149; }
+        .card-danger h2 { color: #f85149; }
+        dl { display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 1rem; }
+        dt { color: #8b949e; font-size: 0.8rem; text-transform: uppercase; padding-top: 0.2rem; }
+        dd { font-size: 0.85rem; word-break: break-all; }
+        .mono { font-family: monospace; color: #79c0ff; }
+        .badge { padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.75rem; font-weight: 500; display: inline-block; }
+        .badge-green { background: #238636; color: #fff; }
+        .badge-red { background: #da3633; color: #fff; }
+        .badge-yellow { background: #9e6a03; color: #fff; }
+        .badge-gray { background: #30363d; color: #8b949e; }
+        .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.85rem; font-weight: 500; text-decoration: none; display: inline-block; }
+        .btn-primary { background: #238636; color: #fff; }
+        .btn-danger { background: #da3633; color: #fff; }
+        .btn-blue { background: #1f6feb; color: #fff; }
+        .actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+        a { color: #58a6ff; }
+        .verification-result { margin-top: 1rem; padding: 1rem; border-radius: 6px; }
+        .result-pass { background: #0d2818; border: 1px solid #238636; }
+        .result-fail { background: #2d1117; border: 1px solid #f85149; }
+        .result-item { display: flex; justify-content: space-between; padding: 0.3rem 0; font-size: 0.85rem; }
+        .check { color: #3fb950; }
+        .cross { color: #f85149; }
+        .tamper-warning { background: #2d1117; border: 1px solid #f85149; border-radius: 6px; padding: 1rem; margin-top: 1rem; color: #f85149; }
+    </style>
+</head>
+<body>
+    <a href="/" class="back">&larr; Back to Dashboard</a>
+    <h1>Decision Record</h1>
+    <p style="color: #8b949e; font-size: 0.85rem;">{{ envelope.record.decision_id }}</p>
+
+    {% if envelope.get('tampered') %}
+    <div class="tamper-warning">
+        This record has been tampered with locally. The Arweave-anchored version is unaffected.
+    </div>
+    {% endif %}
+
+    <div class="grid">
+        <!-- Decision Info -->
+        <div class="card">
+            <h2>Decision Record</h2>
+            <dl>
+                <dt>Decision ID</dt>
+                <dd class="mono">{{ envelope.record.decision_id }}</dd>
+                <dt>Timestamp</dt>
+                <dd>{{ envelope.record.timestamp }}</dd>
+                <dt>Input Hash</dt>
+                <dd class="mono">{{ envelope.record.input_hash }}</dd>
+                <dt>Output Hash</dt>
+                <dd class="mono">{{ envelope.record.output_hash }}</dd>
+                <dt>Latency</dt>
+                <dd>{{ envelope.record.latency_ms }} ms</dd>
+                <dt>Human Override</dt>
+                <dd>{{ envelope.record.human_override }}</dd>
+            </dl>
+        </div>
+
+        <!-- MLflow Metadata -->
+        <div class="card">
+            <h2>MLflow Metadata</h2>
+            <dl>
+                <dt>Model Name</dt>
+                <dd>{{ envelope.record.model_name }}</dd>
+                <dt>Model Version</dt>
+                <dd>{{ envelope.record.model_version }}</dd>
+                <dt>Run ID</dt>
+                <dd class="mono">{{ envelope.record.mlflow_run_id }}</dd>
+                <dt>Artifact URI</dt>
+                <dd class="mono">{{ envelope.record.artifact_uri }}</dd>
+            </dl>
+        </div>
+
+        <!-- OpenTelemetry Trace -->
+        <div class="card">
+            <h2>OpenTelemetry Trace</h2>
+            <dl>
+                <dt>Service</dt>
+                <dd>{{ envelope.record.service_name }}</dd>
+                <dt>Trace ID</dt>
+                <dd class="mono">{{ envelope.record.trace_id }}</dd>
+                <dt>Span ID</dt>
+                <dd class="mono">{{ envelope.record.span_id }}</dd>
+            </dl>
+        </div>
+
+        <!-- Proof Layer -->
+        <div class="card {% if envelope.get('tampered') %}card-danger{% endif %}">
+            <h2>Proof Layer</h2>
+            <dl>
+                <dt>Record Hash</dt>
+                <dd class="mono">{{ envelope.record_hash }}</dd>
+                <dt>Previous Hash</dt>
+                <dd class="mono">{{ envelope.previous_hash }}</dd>
+                <dt>Signature</dt>
+                <dd class="mono" style="font-size:0.7rem;">{{ envelope.signature }}</dd>
+                <dt>Public Key</dt>
+                <dd class="mono" style="font-size:0.7rem;">{{ envelope.public_key }}</dd>
+            </dl>
+        </div>
+
+        <!-- Arweave Anchoring -->
+        <div class="card">
+            <h2>Arweave Anchoring</h2>
+            {% if envelope.arweave_tx_id %}
+            <dl>
+                <dt>Transaction ID</dt>
+                <dd class="mono"><a href="{{ envelope.arweave_url }}" target="_blank">{{ envelope.arweave_tx_id }}</a></dd>
+                <dt>Gateway URL</dt>
+                <dd><a href="{{ envelope.arweave_url }}" target="_blank">{{ envelope.arweave_url }}</a></dd>
+                <dt>Status</dt>
+                <dd><span class="badge badge-green">Anchored</span></dd>
+            </dl>
+            {% else %}
+            <p style="color: #8b949e;">Not anchored — no Arweave wallet configured or upload not performed.</p>
+            {% endif %}
+        </div>
+
+        <!-- AR.IO Verification -->
+        <div class="card">
+            <h2>AR.IO Verification</h2>
+            {% if envelope.ario_verify_id %}
+            <dl>
+                <dt>Verification ID</dt>
+                <dd class="mono">{{ envelope.ario_verify_id }}</dd>
+                <dt>Status</dt>
+                <dd>{{ envelope.ario_verify_status }}</dd>
+                <dt>Level</dt>
+                <dd>
+                    {% if envelope.ario_verify_level == 3 %}
+                        <span class="badge badge-green">Level 3 — Verified</span>
+                    {% elif envelope.ario_verify_level == 2 %}
+                        <span class="badge badge-yellow">Level 2 — Partially Verified</span>
+                    {% elif envelope.ario_verify_level == 1 %}
+                        <span class="badge badge-yellow">Level 1 — Pending</span>
+                    {% else %}
+                        <span class="badge badge-gray">Unknown</span>
+                    {% endif %}
+                </dd>
+                {% if envelope.ario_verify_attestation_url %}
+                <dt>Attestation</dt>
+                <dd><a href="{{ envelope.ario_verify_attestation_url }}" target="_blank">View Attestation</a></dd>
+                {% endif %}
+            </dl>
+            {% else %}
+            <p style="color: #8b949e;">AR.IO Verify not available or not yet verified.</p>
+            {% endif %}
+        </div>
+
+        <!-- Local Verification -->
+        {% if verification %}
+        <div class="card card-full">
+            <h2>Local Verification Result</h2>
+            <div class="verification-result {{ 'result-pass' if verification.overall else 'result-fail' }}">
+                <div class="result-item">
+                    <span>Record Hash Match</span>
+                    <span class="{{ 'check' if verification.hash_valid else 'cross' }}">
+                        {{ 'PASS' if verification.hash_valid else 'FAIL' }}
+                    </span>
+                </div>
+                <div class="result-item">
+                    <span>Signature Valid</span>
+                    <span class="{{ 'check' if verification.signature_valid else 'cross' }}">
+                        {{ 'PASS' if verification.signature_valid else 'FAIL' }}
+                    </span>
+                </div>
+                <div class="result-item" style="border-top: 1px solid #30363d; margin-top: 0.5rem; padding-top: 0.5rem;">
+                    <strong>Overall</strong>
+                    <strong class="{{ 'check' if verification.overall else 'cross' }}">
+                        {{ 'VALID' if verification.overall else 'INVALID' }}
+                    </strong>
+                </div>
+                {% if not verification.hash_valid %}
+                <div style="margin-top: 0.75rem; font-size: 0.8rem;">
+                    <div>Stored hash: <span class="mono">{{ verification.stored_hash }}</span></div>
+                    <div>Computed hash: <span class="mono">{{ verification.computed_hash }}</span></div>
+                </div>
+                {% endif %}
+            </div>
+            {% if envelope.arweave_tx_id and not verification.overall %}
+            <div style="margin-top: 1rem; padding: 0.75rem; background: #0d2818; border: 1px solid #238636; border-radius: 6px; font-size: 0.85rem;">
+                The original, untampered record is permanently stored on Arweave:
+                <a href="{{ envelope.arweave_url }}" target="_blank">{{ envelope.arweave_tx_id }}</a>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="actions">
+        <form action="/verify/{{ envelope.record.decision_id }}" method="POST" style="display:inline;">
+            <button type="submit" class="btn btn-primary">Re-Verify</button>
+        </form>
+        {% if not envelope.get('tampered') %}
+        <form action="/tamper/{{ envelope.record.decision_id }}" method="POST" style="display:inline;">
+            <button type="submit" class="btn btn-danger">Tamper With Record</button>
+        </form>
+        {% endif %}
+        <a href="/" class="btn btn-blue">Back to Dashboard</a>
+    </div>
+</body>
+</html>
