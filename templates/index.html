@@ -39,6 +39,7 @@
         th { text-align: left; padding: 0.75rem; border-bottom: 1px solid #E0E0E4; color: #6B6B7B; font-size: 0.8rem; text-transform: uppercase; }
         td { padding: 0.75rem; border-bottom: 1px solid #F0F0F0; font-size: 0.85rem; }
         tr:hover { background: #E8E8F0; }
+        tr.hidden { display: none; }
         .hash { font-family: monospace; color: #5427C8; font-size: 0.8rem; }
         .badge { padding: 0.2rem 0.5rem; border-radius: 12px; font-size: 0.75rem; font-weight: 500; }
         .badge-green { background: #238636; color: #fff; }
@@ -49,6 +50,19 @@
         a:hover { text-decoration: underline; }
         .actions { display: flex; gap: 0.5rem; }
         .empty { text-align: center; padding: 3rem; color: #B0B0B8; }
+        .summary { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+        .summary-item { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 1rem; border-radius: 6px; border: 2px solid transparent; cursor: pointer; font-size: 0.85rem; font-weight: 500; transition: border-color 0.15s; }
+        .summary-item:hover { border-color: #5427C8; }
+        .summary-item.active { border-color: #5427C8; }
+        .summary-count { font-size: 1.2rem; font-weight: 700; font-family: 'Besley', serif; }
+        .summary-verified { background: #E8F5E9; }
+        .summary-verified .summary-count { color: #238636; }
+        .summary-anchored { background: #FFF8E1; }
+        .summary-anchored .summary-count { color: #9e6a03; }
+        .summary-failed { background: #FFEBEE; }
+        .summary-failed .summary-count { color: #da3633; }
+        .summary-local { background: #F0F0F0; }
+        .summary-local .summary-count { color: #6B6B7B; }
     </style>
 </head>
 <body>
@@ -74,6 +88,38 @@
             ar.io Verify: {{ 'Connected' if ario_verify_enabled else 'Unavailable' }}
         </div>
     </div>
+
+    {% if records %}
+    {# Compute status counts #}
+    {% set ns = namespace(verified=0, anchored=0, failed=0, local=0) %}
+    {% for env in records %}
+        {% set v = env.get('last_verification') %}
+        {% if v and v.hash_valid and v.signature_valid and v.permanent_copy_found and v.hash_match %}
+            {% set ns.verified = ns.verified + 1 %}
+        {% elif v and not (v.hash_valid and v.signature_valid and v.permanent_copy_found and v.hash_match) %}
+            {% set ns.failed = ns.failed + 1 %}
+        {% elif env.arweave_tx_id %}
+            {% set ns.anchored = ns.anchored + 1 %}
+        {% else %}
+            {% set ns.local = ns.local + 1 %}
+        {% endif %}
+    {% endfor %}
+
+    <div class="summary">
+        <div class="summary-item summary-verified" onclick="filterStatus('verified')" id="filter-verified">
+            <span class="summary-count">{{ ns.verified }}</span> Verified
+        </div>
+        <div class="summary-item summary-anchored" onclick="filterStatus('anchored')" id="filter-anchored">
+            <span class="summary-count">{{ ns.anchored }}</span> Anchored
+        </div>
+        <div class="summary-item summary-failed" onclick="filterStatus('failed')" id="filter-failed">
+            <span class="summary-count">{{ ns.failed }}</span> Failed
+        </div>
+        <div class="summary-item summary-local" onclick="filterStatus('local')" id="filter-local">
+            <span class="summary-count">{{ ns.local }}</span> Local Only
+        </div>
+    </div>
+    {% endif %}
 
     <div class="card">
         <h2>Submit Prediction</h2>
@@ -103,7 +149,7 @@
     <div class="card">
         <h2>Decision Records ({{ records|length }})</h2>
         {% if records %}
-        <table>
+        <table id="records-table">
             <thead>
                 <tr>
                     <th>Decision ID</th>
@@ -117,7 +163,17 @@
             </thead>
             <tbody>
                 {% for env in records|reverse %}
-                <tr>
+                {% set v = env.get('last_verification') %}
+                {% if v and v.hash_valid and v.signature_valid and v.permanent_copy_found and v.hash_match %}
+                    {% set row_status = 'verified' %}
+                {% elif v and not (v.hash_valid and v.signature_valid and v.permanent_copy_found and v.hash_match) %}
+                    {% set row_status = 'failed' %}
+                {% elif env.arweave_tx_id %}
+                    {% set row_status = 'anchored' %}
+                {% else %}
+                    {% set row_status = 'local' %}
+                {% endif %}
+                <tr data-status="{{ row_status }}">
                     <td><a href="/ui/decisions/{{ env.record.decision_id }}">{{ env.record.decision_id[:8] }}...</a></td>
                     <td>{{ env.record.timestamp[:19] }}</td>
                     <td>{{ env.record.prediction['class'] if env.record.prediction is defined else 'N/A' }}</td>
@@ -130,10 +186,12 @@
                         {% endif %}
                     </td>
                     <td>
-                        {% if env.get('tampered') %}
-                            <span class="badge badge-red">Tampered</span>
-                        {% elif env.arweave_tx_id %}
-                            <span class="badge badge-green">Anchored</span>
+                        {% if row_status == 'verified' %}
+                            <span class="badge badge-green">Verified</span>
+                        {% elif row_status == 'failed' %}
+                            <span class="badge badge-red">Failed</span>
+                        {% elif row_status == 'anchored' %}
+                            <span class="badge badge-yellow">Anchored</span>
                         {% else %}
                             <span class="badge badge-gray">Local Only</span>
                         {% endif %}
@@ -141,14 +199,12 @@
                     <td>
                         <div class="actions">
                             <a href="/ui/decisions/{{ env.record.decision_id }}" class="btn btn-blue btn-sm">Detail</a>
-                            <form action="/verify/{{ env.record.decision_id }}" method="POST" style="display:inline;">
-                                <button type="submit" class="btn btn-primary btn-sm">Verify</button>
-                            </form>
-                            {% if not env.get('tampered') %}
+                            {% if env.arweave_tx_id %}
+                            <a href="/ui/decisions/{{ env.record.decision_id }}?verify=true" class="btn btn-primary btn-sm">Verify</a>
+                            {% endif %}
                             <form action="/tamper/{{ env.record.decision_id }}" method="POST" style="display:inline;">
                                 <button type="submit" class="btn btn-danger btn-sm">Tamper</button>
                             </form>
-                            {% endif %}
                         </div>
                     </td>
                 </tr>
@@ -161,5 +217,30 @@
         </div>
         {% endif %}
     </div>
+
+    <script>
+    let activeFilter = null;
+
+    function filterStatus(status) {
+        const items = document.querySelectorAll('.summary-item');
+        const rows = document.querySelectorAll('#records-table tbody tr');
+
+        if (activeFilter === status) {
+            // Clear filter
+            activeFilter = null;
+            items.forEach(el => el.classList.remove('active'));
+            rows.forEach(row => row.classList.remove('hidden'));
+        } else {
+            // Apply filter
+            activeFilter = status;
+            items.forEach(el => {
+                el.classList.toggle('active', el.id === 'filter-' + status);
+            });
+            rows.forEach(row => {
+                row.classList.toggle('hidden', row.dataset.status !== status);
+            });
+        }
+    }
+    </script>
 </body>
 </html>
