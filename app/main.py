@@ -1,4 +1,5 @@
 import logging
+import os
 import threading
 import time
 from contextlib import asynccontextmanager
@@ -315,6 +316,11 @@ def api_train(request: Request, body: dict, background_tasks: BackgroundTasks):
             registration_proof,
         )
 
+    # Auto-switch to the newly trained model
+    new_model_info = load_model(settings.mlflow_tracking_uri, settings.mlflow_model_name)
+    request.app.state.model_info = new_model_info
+    logger.info(f"Switched active model to v{info['model_version']}")
+
     return {
         "run_id": info["run_id"],
         "model_name": info["model_name"],
@@ -323,6 +329,39 @@ def api_train(request: Request, body: dict, background_tasks: BackgroundTasks):
         "training_event_id": training_record["event_id"],
         "registration_event_id": registration_record["event_id"],
     }
+
+
+@app.post("/api/activate/{model_name}/{version}")
+def activate_model(request: Request, model_name: str, version: str):
+    """Switch the active model to a specific version."""
+    import mlflow
+    settings = request.app.state.settings
+    mlflow.set_tracking_uri(os.path.abspath(settings.mlflow_tracking_uri))
+
+    model_uri = f"models:/{model_name}/{version}"
+    try:
+        model = mlflow.pyfunc.load_model(model_uri)
+    except Exception as e:
+        return JSONResponse({"error": f"Could not load model: {e}"}, status_code=404)
+
+    client = mlflow.tracking.MlflowClient()
+    versions = client.search_model_versions(f"name='{model_name}'")
+    mv = next((v for v in versions if str(v.version) == str(version)), None)
+
+    request.app.state.model_info = {
+        "model": model,
+        "model_name": model_name,
+        "model_version": str(version),
+        "run_id": mv.run_id if mv else "unknown",
+        "artifact_uri": model_uri,
+    }
+    logger.info(f"Activated model {model_name}/v{version}")
+
+    accept = request.headers.get("accept", "")
+    if "text/html" in accept:
+        return RedirectResponse("/ui/registry", status_code=303)
+
+    return {"activated": True, "model_name": model_name, "model_version": str(version)}
 
 
 @app.get("/decisions")
