@@ -1,106 +1,9 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Decision {{ envelope.record.decision_id[:8] }} — Verifiable AI</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Besley:wght@400;800&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --primary: #5427C8;
-            --primary-hover: #6B3FE4;
-            --lavender: #DFD6F7;
-            --black: #23232D;
-            --white: #FFFFFF;
-            --surface: #F0F0F0;
-            --border: #E4E4E8;
-            --muted: #8A8A99;
-            --green: #1A7F37;
-            --green-bg: #DAFBE1;
-            --yellow: #9A6700;
-            --yellow-bg: #FFF8C5;
-            --red: #CF222E;
-            --red-bg: #FFEBE9;
-            --gray-bg: #F0F0F4;
-        }
+{% extends "base.html" %}
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+{% block title %}Decision {{ envelope.record.decision_id[:8] }} — Verifiable AI{% endblock %}
+{% block lineage_url %}/ui/models/{{ envelope.record.model_name }}/{{ envelope.record.model_version }}{% endblock %}
 
-        body {
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            background: var(--white);
-            color: var(--black);
-            min-height: 100vh;
-        }
-
-        /* ── Top bar ── */
-        .topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.75rem 2rem;
-            border-bottom: 1px solid var(--border);
-            background: var(--white);
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        .topbar-left {
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-        }
-        .topbar-left img { height: 22px; opacity: 0.9; }
-        .topbar-left a { color: var(--black); text-decoration: none; }
-        .topbar-title {
-            font-family: 'Besley', serif;
-            font-weight: 800;
-            font-size: 1rem;
-            color: var(--black);
-        }
-        .topbar-nav {
-            display: flex;
-            gap: 1.25rem;
-            align-items: center;
-            margin-left: 1.5rem;
-        }
-        .topbar-nav a {
-            color: var(--muted);
-            text-decoration: none;
-            font-size: 0.85rem;
-            font-weight: 500;
-            transition: color 0.15s;
-        }
-        .topbar-nav a:hover { color: var(--black); text-decoration: none; }
-        .topbar-nav a.active { color: var(--black); font-weight: 600; }
-        .topbar-right {
-            display: flex;
-            gap: 0.75rem;
-            align-items: center;
-        }
-
-        /* ── Main ── */
-        .main { padding: 2rem; max-width: 1400px; margin: 0 auto; }
-
-        /* ── Page header ── */
-        .page-header {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            margin-bottom: 2rem;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-        .page-header-left {}
-        .page-header h1 {
-            font-family: 'Besley', serif;
-            font-weight: 800;
-            font-size: 1.5rem;
-            color: var(--black);
-            letter-spacing: -0.02em;
-            line-height: 1.2;
-        }
+{% block styles %}
         .page-id {
             font-family: 'JetBrains Mono', 'SF Mono', monospace;
             font-size: 0.8rem;
@@ -190,38 +93,6 @@
             word-break: break-all;
             flex: 1;
         }
-        .mono {
-            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
-            color: var(--primary);
-            font-size: 0.8rem;
-        }
-        .mono-sm { font-size: 0.7rem; }
-
-        /* ── Badges ── */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.3rem;
-            padding: 0.2rem 0.55rem;
-            border-radius: 4px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
-        }
-        .badge-green { background: var(--green-bg); color: var(--green); }
-        .badge-yellow { background: var(--yellow-bg); color: var(--yellow); }
-        .badge-red { background: var(--red-bg); color: var(--red); }
-        .badge-gray { background: var(--gray-bg); color: var(--muted); }
-        .badge-primary { background: var(--lavender); color: var(--primary); }
-        .badge-dot {
-            width: 5px; height: 5px;
-            border-radius: 50%;
-            display: inline-block;
-        }
-        .badge-green .badge-dot { background: var(--green); }
-        .badge-yellow .badge-dot { background: var(--yellow); }
-        .badge-red .badge-dot { background: var(--red); }
 
         /* ── Probability bars ── */
         .prob-row {
@@ -289,59 +160,12 @@
         .verify-note-warn { background: var(--yellow-bg); color: var(--yellow); border: 1px solid var(--yellow); }
         .verify-note-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
 
-        /* ── Buttons ── */
-        .btn {
-            padding: 0.5rem 1rem;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 0.85rem;
-            font-weight: 600;
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            transition: all 0.15s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-        }
-        .btn-primary { background: var(--primary); color: var(--white); }
-        .btn-primary:hover { background: var(--primary-hover); }
-        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--lavender); }
-        .btn-outline:hover { background: var(--lavender); }
-        .btn-danger-outline { background: transparent; color: var(--red); border: 1px solid var(--red-bg); }
-        .btn-danger-outline:hover { background: var(--red-bg); }
-        .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; border-radius: 4px; }
-        a { color: var(--primary); text-decoration: none; }
-        a:hover { text-decoration: underline; }
-        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-        .badge-dot-pulse { animation: pulse-dot 1.5s ease-in-out infinite; }
-
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-        .main { animation: fadeIn 0.25s ease-out; }
-
         @media (max-width: 768px) {
-            .topbar { flex-wrap: wrap; padding: 0.75rem 1rem; }
-            .topbar-nav { margin-left: 0; margin-top: 0.5rem; width: 100%; }
-            .main { padding: 1rem; }
             .grid { grid-template-columns: 1fr; }
-            .page-header { flex-direction: column; }
         }
-    </style>
-</head>
-<body>
-    <div class="topbar">
-        <div class="topbar-left">
-            <a href="/"><img src="https://ar.io/brand/ario-full-black.svg" alt="ar.io"></a>
-            <a href="/" class="topbar-title">Verifiable AI</a>
-            <div class="topbar-nav">
-                <a href="/">Predictions</a>
-                <a href="/ui/registry">Registry</a>
-                <a href="/ui/models/{{ envelope.record.model_name }}/{{ envelope.record.model_version }}">Model Lineage</a>
-            </div>
-        </div>
-    </div>
+{% endblock %}
 
-    <div class="main">
+{% block content %}
         {% set v = envelope.get('last_verification') %}
 
         <div class="page-header">
@@ -714,8 +538,9 @@
                 </div>
             </div>
         </div>
-    </div>
+{% endblock %}
 
+{% block scripts %}
     {% if not envelope.arweave_tx_id and arweave_enabled %}
     <script>
     (function() {
@@ -742,5 +567,4 @@
     })();
     </script>
     {% endif %}
-</body>
-</html>
+{% endblock %}

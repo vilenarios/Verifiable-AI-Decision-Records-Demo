@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Verifiable AI{% endblock %}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Besley:wght@400;800&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #5427C8;
+            --primary-hover: #6B3FE4;
+            --lavender: #DFD6F7;
+            --black: #23232D;
+            --white: #FFFFFF;
+            --surface: #F0F0F0;
+            --border: #E4E4E8;
+            --muted: #8A8A99;
+            --green: #1A7F37;
+            --green-bg: #DAFBE1;
+            --yellow: #9A6700;
+            --yellow-bg: #FFF8C5;
+            --red: #CF222E;
+            --red-bg: #FFEBE9;
+            --gray-bg: #F0F0F4;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--white);
+            color: var(--black);
+            min-height: 100vh;
+        }
+
+        /* ── Top bar ── */
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 2rem;
+            border-bottom: 1px solid var(--border);
+            background: var(--white);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        .topbar-left {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .topbar-left img { height: 22px; opacity: 0.9; }
+        .topbar-left a { color: var(--black); text-decoration: none; }
+        .topbar-title {
+            font-family: 'Besley', serif;
+            font-weight: 800;
+            font-size: 1rem;
+            color: var(--black);
+            letter-spacing: -0.01em;
+        }
+        .topbar-right {
+            display: flex;
+            gap: 1.25rem;
+            align-items: center;
+        }
+        .sys-status {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.75rem;
+            color: var(--muted);
+        }
+        .sys-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .sys-dot-on { background: var(--green); }
+        .sys-dot-off { background: var(--border); }
+        .topbar-nav {
+            display: flex;
+            gap: 1.25rem;
+            align-items: center;
+            margin-left: 1.5rem;
+        }
+        .topbar-nav a {
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: color 0.15s;
+        }
+        .topbar-nav a:hover { color: var(--black); text-decoration: none; }
+        .topbar-nav a.active { color: var(--black); font-weight: 600; }
+
+        /* ── Main content ── */
+        .main { padding: 2rem; max-width: {% block max_width %}1400px{% endblock %}; margin: 0 auto; }
+
+        /* ── Page header ── */
+        .page-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            margin-bottom: 2rem;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .page-header h1 {
+            font-family: 'Besley', serif;
+            font-weight: 800;
+            font-size: 1.75rem;
+            color: var(--black);
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+        }
+        .page-header p {
+            color: var(--muted);
+            font-size: 0.9rem;
+            margin-top: 0.25rem;
+        }
+
+        /* ── Buttons ── */
+        .btn {
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 600;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            transition: all 0.15s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+        }
+        .btn-primary { background: var(--primary); color: var(--white); }
+        .btn-primary:hover { background: var(--primary-hover); text-decoration: none; }
+        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--lavender); }
+        .btn-outline:hover { background: var(--lavender); text-decoration: none; }
+        .btn-danger-outline { background: transparent; color: var(--red); border: 1px solid var(--red-bg); }
+        .btn-danger-outline:hover { background: var(--red-bg); }
+        .btn-sm { padding: 0.3rem 0.6rem; font-size: 0.75rem; border-radius: 4px; }
+
+        /* ── Typography ── */
+        .mono {
+            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+            color: var(--primary);
+            font-size: 0.8rem;
+        }
+        .mono-sm { font-size: 0.7rem; }
+        a { color: var(--primary); text-decoration: none; }
+        a:hover { text-decoration: underline; }
+
+        /* ── Badges ── */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.2rem 0.55rem;
+            border-radius: 4px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .badge-green { background: var(--green-bg); color: var(--green); }
+        .badge-yellow { background: var(--yellow-bg); color: var(--yellow); }
+        .badge-red { background: var(--red-bg); color: var(--red); }
+        .badge-gray { background: var(--gray-bg); color: var(--muted); }
+        .badge-primary { background: var(--lavender); color: var(--primary); }
+        .badge-dot {
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .badge-green .badge-dot { background: var(--green); }
+        .badge-yellow .badge-dot { background: var(--yellow); }
+        .badge-red .badge-dot { background: var(--red); }
+        .badge-gray .badge-dot { background: var(--muted); }
+        @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .badge-dot-pulse { animation: pulse-dot 1.5s ease-in-out infinite; }
+
+        /* ── Tables ── */
+        .table-wrap {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        table { width: 100%; border-collapse: collapse; }
+        thead { background: var(--surface); }
+        th {
+            text-align: left;
+            padding: 0.65rem 1rem;
+            font-size: 0.7rem;
+            font-weight: 600;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border);
+        }
+        td {
+            padding: 0.7rem 1rem;
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border);
+            vertical-align: middle;
+        }
+        tbody tr { transition: background 0.1s; }
+        tbody tr:hover { background: var(--surface); }
+        tbody tr:last-child td { border-bottom: none; }
+
+        /* ── Actions ── */
+        .actions { display: flex; gap: 0.35rem; align-items: center; }
+
+        /* ── Page transition ── */
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+        .main { animation: fadeIn 0.25s ease-out; }
+
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .topbar { flex-wrap: wrap; padding: 0.75rem 1rem; }
+            .topbar-nav { margin-left: 0; margin-top: 0.5rem; width: 100%; }
+            .topbar-right { display: none; }
+            .main { padding: 1rem; }
+            .page-header { flex-direction: column; }
+            .table-wrap { overflow-x: auto; }
+        }
+
+        {% block styles %}{% endblock %}
+    </style>
+</head>
+<body>
+    <div class="topbar">
+        <div class="topbar-left">
+            <a href="/"><img src="https://ar.io/brand/ario-full-black.svg" alt="ar.io"></a>
+            <a href="/" class="topbar-title">Verifiable AI</a>
+            <div class="topbar-nav">
+                <a href="/" class="{% block nav_models %}{% endblock %}">Models</a>
+                <a href="/ui/predictions" class="{% block nav_predictions %}{% endblock %}">Predictions</a>
+                <a href="{% block lineage_url %}/{% endblock %}" class="{% block nav_lineage %}{% endblock %}">Model Lineage</a>
+            </div>
+        </div>
+        {% block topbar_right %}{% endblock %}
+    </div>
+
+    <div class="main">
+        {% block content %}{% endblock %}
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -45,8 +45,8 @@ def _verify_envelope(app, envelope):
     return result, local
 
 
-@router.get("/", response_class=HTMLResponse)
-def index(request: Request):
+@router.get("/ui/predictions", response_class=HTMLResponse)
+def predictions(request: Request):
     app = request.app
     records = app.state.store.list_all()
     model_info = app.state.model_info
@@ -91,7 +91,7 @@ def index(request: Request):
     )
 
 
-@router.get("/ui/registry", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
 def model_registry(request: Request):
     app = request.app
     settings = app.state.settings
@@ -151,6 +151,11 @@ def model_registry(request: Request):
             "arweave_enabled": app.state.anchor.enabled if app.state.anchor else False,
         },
     )
+
+
+@router.get("/ui/registry")
+def registry_redirect():
+    return RedirectResponse("/", status_code=301)
 
 
 @router.get("/ui/decisions/{decision_id}", response_class=HTMLResponse)

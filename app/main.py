@@ -359,7 +359,7 @@ def activate_model(request: Request, model_name: str, version: str):
 
     accept = request.headers.get("accept", "")
     if "text/html" in accept:
-        return RedirectResponse("/ui/registry", status_code=303)
+        return RedirectResponse("/", status_code=303)
 
     return {"activated": True, "model_name": model_name, "model_version": str(version)}
 

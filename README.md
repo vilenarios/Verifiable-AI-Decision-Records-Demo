@@ -125,15 +125,19 @@ Without a wallet, the app runs in **local proof mode** — hashing, signing, and
 
 ## Demo Walkthrough
 
-### 1. View the Chain of Custody
+### 1. Train a Model
 
-On startup, training and registration proofs are automatically anchored. Click **Model Lineage** in the navigation to see the chain: Training Run → Model Registration → Predictions.
+The landing page (`/`) shows the Models page. Click **Train & Anchor** to train a new model. Watch the four-step progress: training → registering → anchoring training proof → anchoring registration proof. After completion, the app automatically redirects to the chain of custody page.
 
-### 2. Make a Prediction
+### 2. View the Chain of Custody
 
-Submit the form with iris flower measurements. The response is instant — the detail page shows "Anchoring..." with a pulsing indicator, then auto-updates when the Arweave upload completes (~1-2s).
+The chain of custody page shows the proof chain forming in real time: Training Run → Model Registration → Predictions. Each node shows its verification status and Arweave transaction ID.
 
-### 3. View the Decision Record
+### 3. Make a Prediction
+
+Navigate to **Predictions** and submit the form with iris flower measurements. The response is instant — the detail page shows "Anchoring..." with a pulsing indicator, then auto-updates when the Arweave upload completes (~1-2s).
+
+### 4. View the Decision Record
 
 Click a decision ID to see the full record:
 - **Prediction** — class, probabilities with visual bars, features used
@@ -143,16 +147,12 @@ Click a decision ID to see the full record:
 - **Arweave anchoring** — transaction ID, status (Anchoring → Anchored → Confirmed → Permanent)
 - **Turbo upload receipt** — millisecond timestamp, wallet owner, signed receipt
 
-### 4. Verify a Record
+### 5. Verify a Record
 
 Click **Verify with ar.io** to run on-demand verification:
 - **Local** — re-hashes the record and checks the Ed25519 signature
 - **Arweave** — fetches the proof from an ar.io gateway and compares hashes
 - **ar.io Verify** — requests an independent attestation from the ar.io gateway operator
-
-### 5. Train and Activate Models
-
-Click **Train** to retrain the model — the app automatically switches to the new version. Visit the **Model Registry** to see all versions and activate any previous version with the **Activate** button. The dashboard's version filter lets you compare predictions across model versions.
 
 ### 6. Tamper with a Record
 
@@ -162,7 +162,8 @@ Click **Tamper** to modify the local record's output hash, then **Verify with ar
 
 | Page | URL | Description |
 |---|---|---|
-| Dashboard | `/` | Prediction records, stats, prediction form, model provenance card, version filter |
+| Models (landing page) | `/` | Model versions, train new models, activate versions |
+| Predictions | `/ui/predictions` | Prediction records, stats, prediction form, model provenance card, version filter |
 | Decision detail | `/ui/decisions/{id}` | Full decision record with three-level verification |
 | Chain of custody | `/ui/models/{name}/{version}` | Training → Registration → Predictions chain |
 | Training run detail | `/ui/runs/{run_id}` | Training params, metrics, artifact hashes, verification |
