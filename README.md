@@ -150,7 +150,11 @@ Click **Verify with ar.io** to run on-demand verification:
 - **Arweave** — fetches the proof from an ar.io gateway and compares hashes
 - **ar.io Verify** — requests an independent attestation from the ar.io gateway operator
 
-### 5. Tamper with a Record
+### 5. Train and Activate Models
+
+Click **Train** to retrain the model — the app automatically switches to the new version. Visit the **Model Registry** to see all versions and activate any previous version with the **Activate** button. The dashboard's version filter lets you compare predictions across model versions.
+
+### 6. Tamper with a Record
 
 Click **Tamper** to modify the local record's output hash, then **Verify with ar.io** — local verification FAILS but the Arweave copy is still intact, proving the local record was modified after anchoring.
 
@@ -158,7 +162,7 @@ Click **Tamper** to modify the local record's output hash, then **Verify with ar
 
 | Page | URL | Description |
 |---|---|---|
-| Dashboard | `/` | Prediction records, stats, prediction form, model provenance card |
+| Dashboard | `/` | Prediction records, stats, prediction form, model provenance card, version filter |
 | Decision detail | `/ui/decisions/{id}` | Full decision record with three-level verification |
 | Chain of custody | `/ui/models/{name}/{version}` | Training → Registration → Predictions chain |
 | Training run detail | `/ui/runs/{run_id}` | Training params, metrics, artifact hashes, verification |
@@ -173,6 +177,7 @@ Click **Tamper** to modify the local record's output hash, then **Verify with ar
 | `/decisions/{id}` | GET | Get a single decision record |
 | `/verify/{id}` | POST | Verify a decision (local + Arweave + ar.io Verify) |
 | `/tamper/{id}` | POST | Tamper with a record (demo only) |
+| `/api/activate/{name}/{version}` | POST | Switch the active model to a specific version |
 | `/lifecycle` | GET | List all lifecycle records (training, registration) |
 | `/lifecycle/{event_id}` | GET | Get a single lifecycle record |
 
