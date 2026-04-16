@@ -127,6 +127,39 @@
         }
         .train-result.show { display: block; }
 
+        /* ── Context banner ── */
+        .context-banner {
+            padding: 1.25rem 1.5rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+        .context-banner h2 {
+            font-family: 'Besley', serif;
+            font-weight: 800;
+            font-size: 1.1rem;
+            color: var(--black);
+            margin-bottom: 0.5rem;
+        }
+        .context-banner p {
+            font-size: 0.85rem;
+            color: var(--muted);
+            line-height: 1.6;
+            margin-bottom: 0.75rem;
+        }
+        .context-banner p:last-of-type { margin-bottom: 0; }
+        .context-banner .context-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            margin-top: 0.75rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--primary);
+            text-decoration: none;
+        }
+        .context-banner .context-cta:hover { text-decoration: underline; }
+
         @media (max-width: 768px) {
             .train-hero-top { flex-direction: column; align-items: flex-start; }
             .train-form { flex-direction: column; }
@@ -140,6 +173,13 @@
                 <h1>Models</h1>
                 <p>{{ model_name }} — {{ versions|length }} version{{ 's' if versions|length != 1 }}</p>
             </div>
+        </div>
+
+        <!-- Context Banner -->
+        <div class="context-banner">
+            <h2>Can you prove your AI decisions haven't been tampered with?</h2>
+            <p>Train a model, make a prediction, then tamper with the record — and watch independent verification catch it. Every proof is permanently stored and verifiable by any third party. No trust in us required.</p>
+            <a href="https://calendly.com/placeholder/verifiable-ai" target="_blank" class="context-cta">Book a 20-minute walkthrough &rarr;</a>
         </div>
 
         <!-- Hero Training Section -->

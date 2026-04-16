@@ -220,6 +220,40 @@
         @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
         .main { animation: fadeIn 0.25s ease-out; }
 
+        /* ── Footer ── */
+        .site-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1rem 2rem;
+            border-top: 1px solid var(--border);
+            margin-top: 3rem;
+            font-size: 0.8rem;
+            color: var(--muted);
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+        .footer-left {
+            display: flex;
+            align-items: center;
+            gap: 1.25rem;
+            flex-wrap: wrap;
+        }
+        .footer-cta {
+            font-weight: 600;
+            color: var(--black);
+        }
+        .footer-link {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.8rem;
+        }
+        .footer-link:hover { text-decoration: underline; }
+        .footer-sep {
+            color: var(--border);
+        }
+
         /* ── Responsive ── */
         @media (max-width: 768px) {
             .topbar { flex-wrap: wrap; padding: 0.75rem 1rem; }
@@ -228,6 +262,7 @@
             .main { padding: 1rem; }
             .page-header { flex-direction: column; }
             .table-wrap { overflow-x: auto; }
+            .site-footer { flex-direction: column; align-items: flex-start; padding: 1rem; }
         }
 
         {% block styles %}{% endblock %}
@@ -265,6 +300,18 @@
     <div class="main">
         {% block content %}{% endblock %}
     </div>
+
+    <footer class="site-footer">
+        <div class="footer-left">
+            <span class="footer-cta">Preparing for AI compliance?</span>
+            <a href="https://calendly.com/placeholder/verifiable-ai" target="_blank" class="footer-link">Book a 20-min walkthrough</a>
+            <span class="footer-sep">|</span>
+            <a href="https://form.typeform.com/to/placeholder" target="_blank" class="footer-link">Request early access</a>
+        </div>
+        <div class="footer-right">
+            <a href="https://github.com/kempsterrrr/Verifiable-AI-Decision-Records-Demo" target="_blank" class="footer-link">GitHub</a>
+        </div>
+    </footer>
 
     {% block scripts %}{% endblock %}
 </body>
