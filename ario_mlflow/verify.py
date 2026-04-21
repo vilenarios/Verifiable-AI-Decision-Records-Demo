@@ -6,7 +6,7 @@ import os
 import requests
 
 from ario_mlflow.proof import ProofEngine, canonical_json, hash_data
-from ario_mlflow.anchor import ArweaveAnchor
+from ario_mlflow.arweave import ArweaveAnchor
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ class ArioVerifyClient:
         return {
             "verification_id": data.get("verificationId"),
             "status": data.get("existence", {}).get("status", "unknown"),
-            "level": data.get("level"),
+            "attestation_level": data.get("level"),
             "report_url": resolve(links.get("dashboard")),
             "pdf_url": resolve(links.get("pdf")),
             "attested_by": attestation.get("gateway"),
