@@ -18,6 +18,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+import ario_mlflow
+from ario_mlflow import ArioMlflowClient
+from ario_mlflow.proof import ProofEngine
+from ario_mlflow.arweave import ArweaveAnchor
+
 logger = logging.getLogger(__name__)
 
 # Feature order is load-bearing: the prediction handlers build the input
@@ -65,18 +70,60 @@ def _generate_credit_data(n_samples: int = 800, random_state: int = 42):
     return features, labels
 
 
-def train_and_register(tracking_uri: str, model_name: str) -> dict:
+def train_and_register(
+    tracking_uri: str,
+    model_name: str,
+    *,
+    proof_engine: ProofEngine | None = None,
+    arweave: ArweaveAnchor | None = None,
+) -> dict:
     """Train the credit classifier and register it with MLflow (default params)."""
-    return train_and_register_with_params(tracking_uri, model_name)
+    return train_and_register_with_params(
+        tracking_uri, model_name, proof_engine=proof_engine, arweave=arweave,
+    )
 
 
 def train_and_register_with_params(
     tracking_uri: str,
     model_name: str,
+    *,
+    proof_engine: ProofEngine | None = None,
+    arweave: ArweaveAnchor | None = None,
     max_iter: int = 200,
     random_state: int = 42,
 ) -> dict:
-    """Train the credit classifier with configurable params and register it."""
+    """Train the credit classifier and register it via the plugin's headline API.
+
+    Phase 2.A migration: instead of using ``mlflow.sklearn.log_model(...,
+    registered_model_name=...)`` (which auto-registers but doesn't anchor)
+    + manual proof creation, this function now:
+
+    1. Logs the model under the run *without* auto-registration, so we
+       can use ``ArioMlflowClient.create_model_version`` for the
+       registration step.
+    2. Calls ``ario_mlflow.anchor()`` inside the run — produces the
+       pure-commitment training proof, writes ``ario/payload.json``,
+       sets ``ario.training_tx`` / ``ario.payload_hash`` on the run.
+    3. Calls ``ArioMlflowClient.create_model_version()`` after the run
+       closes — auto-anchors the registration proof in a daemon thread,
+       chained to the training's ``ario.training_tx``.
+
+    Args:
+        tracking_uri: MLflow tracking URI.
+        model_name: Registered model name to use.
+        proof_engine: Optional override. When ``None``, ``anchor()`` and
+            ``ArioMlflowClient`` create their own.
+        arweave: Optional override. Same semantics.
+        max_iter: Logistic regression max iterations.
+        random_state: Seed for data + classifier.
+
+    Returns:
+        Dict with ``run_id``, ``model_name``, ``model_version``,
+        ``artifact_uri``, ``accuracy``, plus the new
+        ``training_envelope``, ``training_payload_hash``,
+        ``training_anchor_result`` from the plugin's anchor() so the
+        caller can hydrate UI state.
+    """
     mlflow.set_tracking_uri(tracking_uri)
 
     X, y = _generate_credit_data(n_samples=800, random_state=random_state)
@@ -103,29 +150,83 @@ def train_and_register_with_params(
         mlflow.log_param("feature_names", ",".join(FEATURE_NAMES))
         mlflow.log_metric("accuracy", accuracy)
 
+        # Log the model WITHOUT auto-registration. We register
+        # explicitly via ArioMlflowClient below so the registration
+        # event gets its own anchored proof chained to the training.
         model_info = mlflow.sklearn.log_model(
             pipeline,
             "model",
-            registered_model_name=model_name,
             input_example=X_train[:1],
         )
 
-        client = mlflow.tracking.MlflowClient()
-        versions = client.search_model_versions(f"name='{model_name}'")
-        latest_version = max(int(v.version) for v in versions)
-
-        logger.info(
-            f"Credit model trained: accuracy={accuracy:.4f}, "
-            f"run_id={run.info.run_id}, version={latest_version}"
+        # Anchor the training run via the plugin's headline API.
+        # Writes ario.training_tx, ario.payload_hash, ario.artifact_hash
+        # tags + the ario/payload.json artifact + uploads the
+        # pure-commitment envelope to Arweave.
+        training_anchor = ario_mlflow.anchor(
+            proof_engine=proof_engine,
+            arweave=arweave,
+            metadata={"service_name": "verifiable-ai-demo"},
         )
 
-        return {
-            "run_id": run.info.run_id,
-            "model_name": model_name,
-            "model_version": str(latest_version),
-            "artifact_uri": model_info.model_uri,
-            "accuracy": accuracy,
-        }
+    # Register the model AFTER the run closes via ArioMlflowClient. This
+    # spawns a daemon thread that anchors the registration proof,
+    # chained back to ario.training_tx that anchor() just set on the run.
+    #
+    # MLflow's create_model_version requires the registered model to
+    # already exist (the legacy log_model(registered_model_name=...)
+    # auto-created it; we don't pass that any more). Create it
+    # idempotently here for first-training cases.
+    ario_client = ArioMlflowClient(
+        tracking_uri,
+        proof_engine=proof_engine,
+        anchor=arweave,
+    )
+    try:
+        ario_client.get_registered_model(model_name)
+    except Exception:  # noqa: BLE001
+        # Most common: RestException / MlflowException "not found"
+        # for first training. Some other failure modes (e.g., backend
+        # transiently unavailable) would be retried by create_model_version
+        # itself. Suppress here; only handle the not-found case.
+        try:
+            ario_client.create_registered_model(model_name)
+            logger.info(f"Created new registered model {model_name!r}")
+        except Exception as e:  # noqa: BLE001
+            # If the create races with another caller (e.g. concurrent
+            # first-training requests), this can raise "already exists" —
+            # also fine; let create_model_version proceed.
+            logger.debug(
+                f"create_registered_model({model_name!r}) raised "
+                f"(probably already exists): {e}"
+            )
+
+    mv = ario_client.create_model_version(
+        name=model_name,
+        source=model_info.model_uri,
+        run_id=run.info.run_id,
+    )
+
+    logger.info(
+        f"Credit model trained: accuracy={accuracy:.4f}, "
+        f"run_id={run.info.run_id}, version={mv.version}, "
+        f"training_tx={training_anchor.get('anchor_result', {}).get('tx_id') if training_anchor.get('anchor_result') else None}"
+    )
+
+    return {
+        "run_id": run.info.run_id,
+        "model_name": model_name,
+        "model_version": str(mv.version),
+        "artifact_uri": model_info.model_uri,
+        "accuracy": accuracy,
+        # Phase 2.A: surface the plugin's anchor() output so /api/train
+        # can populate lifecycle_store entries from the new flow.
+        "training_envelope": training_anchor["envelope"],
+        "training_payload": training_anchor["payload"],
+        "training_payload_hash": training_anchor["payload_hash"],
+        "training_anchor_result": training_anchor.get("anchor_result"),
+        "ario_client": ario_client,
+    }
 
 
 class _IncompatibleSchemaError(Exception):
@@ -148,8 +249,24 @@ def _assert_credit_schema(model) -> None:
         )
 
 
-def load_model(tracking_uri: str, model_name: str) -> dict:
-    """Load the latest model from MLflow. Auto-trains if none found or schema stale."""
+def load_model(
+    tracking_uri: str,
+    model_name: str,
+    *,
+    proof_engine: ProofEngine | None = None,
+    arweave: ArweaveAnchor | None = None,
+) -> dict:
+    """Load the latest model from MLflow + wrap it in a VerifiedModel.
+
+    Returns a dict with both the raw sklearn estimator (used for the
+    demo's UI predict that needs ``predict_proba`` for class
+    probabilities) AND a ``VerifiedModel`` instance (used for the
+    cryptographic prediction proof + Arweave anchoring on every
+    ``predict()`` call).
+
+    Auto-trains a new model if no version is registered yet or the
+    registered version's schema doesn't match the credit-scorer.
+    """
     mlflow.set_tracking_uri(tracking_uri)
 
     model_uri = f"models:/{model_name}/latest"
@@ -159,28 +276,58 @@ def load_model(tracking_uri: str, model_name: str) -> dict:
         client = mlflow.tracking.MlflowClient()
         versions = client.search_model_versions(f"name='{model_name}'")
         latest = max(versions, key=lambda v: int(v.version))
+        version_uri = f"models:/{model_name}/{latest.version}"
+        verified_model = _build_verified_model(version_uri, proof_engine, arweave)
         return {
             "model": model,
+            "verified_model": verified_model,
             "model_name": model_name,
             "model_version": str(latest.version),
             "run_id": latest.run_id,
-            "artifact_uri": f"models:/{model_name}/{latest.version}",
+            "artifact_uri": version_uri,
         }
     except Exception as e:
         if isinstance(e, _IncompatibleSchemaError):
             logger.warning(f"Incompatible registered model for {model_name}: {e}. Re-training.")
         else:
             logger.info(f"No model found ({e}), training new model...")
-        info = train_and_register(tracking_uri, model_name)
+        info = train_and_register(tracking_uri, model_name, proof_engine=proof_engine, arweave=arweave)
         model = mlflow.sklearn.load_model(model_uri)
         _assert_credit_schema(model)
+        version_uri = f"models:/{info['model_name']}/{info['model_version']}"
+        verified_model = _build_verified_model(version_uri, proof_engine, arweave)
         return {
             "model": model,
+            "verified_model": verified_model,
             "model_name": info["model_name"],
             "model_version": info["model_version"],
             "run_id": info["run_id"],
-            "artifact_uri": info["artifact_uri"],
+            "artifact_uri": version_uri,
+            # Surface the plugin's anchor results so the lifespan startup
+            # flow can populate lifecycle_store with the real new-shape
+            # TX without re-anchoring (which would generate legacy-shape
+            # duplicates on Arweave).
+            "training_anchor_result": info.get("training_anchor_result"),
+            "training_envelope": info.get("training_envelope"),
+            "training_payload": info.get("training_payload"),
+            "ario_client": info.get("ario_client"),
         }
+
+
+def _build_verified_model(
+    model_uri: str,
+    proof_engine: ProofEngine | None,
+    arweave: ArweaveAnchor | None,
+):
+    """Construct a VerifiedModel wrapping the given URI, using the
+    demo's app-state proof_engine + arweave so the anchored predictions
+    sign with the same key + upload via the same wallet as the rest of
+    the demo's plugin flow."""
+    return ario_mlflow.VerifiedModel(
+        model_uri,
+        proof_engine=proof_engine,
+        anchor=arweave,
+    )
 
 
 def predict(model, features: list[float]) -> dict:

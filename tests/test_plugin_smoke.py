@@ -87,22 +87,9 @@ def test_canonical_json_does_not_round_floats_implicitly():
     assert canonical_json(rounded) == b'{"accuracy":0.912346}'
 
 
-def test_proof_engine_roundtrip_with_auto_generated_keys(tmp_path, monkeypatch):
-    monkeypatch.setenv("ARIO_MLFLOW_KEYS_DIR", str(tmp_path))
-    engine = ProofEngine(str(tmp_path / "priv"), str(tmp_path / "pub"))
-    proof = engine.create_proof({"foo": "bar", "timestamp": "2026-04-21T00:00:00Z"}, "GENESIS")
-    result = engine.verify_local(proof)
-    assert result["hash_valid"] is True
-    assert result["signature_valid"] is True
-    assert result["overall"] is True
-
-
-def test_proof_engine_rejects_tampered_record(tmp_path):
-    engine = ProofEngine(str(tmp_path / "priv"), str(tmp_path / "pub"))
-    proof = engine.create_proof({"foo": "bar", "timestamp": "2026-04-21T00:00:00Z"}, "GENESIS")
-    proof["record"]["foo"] = "mutated"
-    result = engine.verify_local(proof)
-    assert result["overall"] is False
+# Phase 2.E removed the legacy create_proof / verify_local round-trip
+# tests. Their replacements for the new pure-commitment envelope shape
+# follow below.
 
 
 # --- pure-commitment envelope (new shape) ---------------------------------
@@ -234,6 +221,48 @@ def test_verify_commitment_signature_covers_public_key(tmp_path):
     env["public_key"] = bytes(other_vk).hex()
     result = engine.verify_commitment(env)
     assert result["signature_valid"] is False
+
+
+def test_verify_commitment_ignores_underscore_prefixed_caller_annotations(tmp_path):
+    """Caller-attached metadata keys (underscore-prefixed by convention)
+    must not invalidate signature verification.
+
+    Concrete case: ``verify_ario_attestation`` reads ``envelope["_tx_id"]``
+    when set, so the four-check ``full_verify`` flow injects ``_tx_id``
+    onto the envelope before running. Without this exclusion,
+    ``verify_signature`` would canonicalize the *modified* envelope
+    and fail the signature check, breaking ``full_verify`` for any
+    caller passing an envelope through both checks.
+
+    Convention: ``_``-prefixed keys are out-of-band routing metadata,
+    not part of the signed protocol.
+    """
+    engine = ProofEngine(str(tmp_path / "priv"), str(tmp_path / "pub"))
+    env = engine.create_commitment(
+        event_type="prediction",
+        subject={"type": "mlflow_decision", "decision_id": "d-1"},
+        payload_bytes=b'{"input_hash":"abc","output_hash":"def"}',
+        previous_hash="GENESIS",
+    )
+
+    # Without any annotation: signature verifies as expected.
+    assert engine.verify_commitment(env)["signature_valid"] is True
+
+    # Caller attaches routing metadata (e.g. for verify_ario_attestation).
+    env_annotated = dict(env)
+    env_annotated["_tx_id"] = "ar-tx-some-id"
+    env_annotated["_other_internal_field"] = {"foo": "bar"}
+
+    # Signature must still verify — _tx_id and _other_internal_field
+    # are stripped before reconstructing the signed body.
+    result = engine.verify_commitment(env_annotated)
+    assert result["signature_valid"] is True, result
+
+    # Sanity: a NON-underscore-prefixed mutation must still fail
+    # verification (so we know the strip is conservative).
+    env_tampered = dict(env)
+    env_tampered["event_type"] = "ATTACKER"
+    assert engine.verify_commitment(env_tampered)["signature_valid"] is False
 
 
 def test_create_commitment_event_id_and_signed_at_overrides(tmp_path):
@@ -546,21 +575,52 @@ def test_compute_overall_ok_training_passes_when_all_required_green():
     assert out is True
 
 
-def test_compute_overall_ok_prediction_tolerates_none_on_anchored_bytes():
-    """For predictions with legacy subject types (mlflow_trace,
-    mlflow_decision), check 2 returns None and overall should still be
-    able to pass on signature + ar.io. Less strict because v1
-    predictions had no artifact."""
+def test_compute_overall_ok_prediction_requires_full_verification():
+    """v2 predictions require checks 1, 2, 3 to all explicitly pass —
+    same strictness as training. Phase 2 enabled this by mirroring
+    the canonical payload onto the trace as ``ario.payload_json`` so
+    check 3 has a real second MLflow surface to compare against the
+    artifact (parallel to training's params/metrics surface).
+
+    Anything ``None`` on a required check (sig / anchored bytes /
+    source of truth) is treated as a fail rather than silently green —
+    a missing live MLflow surface means we can't actually confirm the
+    state, full stop. ar.io stays optional.
+    """
     from ario_mlflow.verify import _compute_overall_ok
 
     envelope = {"event_type": "prediction"}
-    sig = {"ok": True}
-    bytes_check = {"ok": None}  # legacy subject
-    sot = {"ok": None}
-    ario = {"ok": True}
 
-    out = _compute_overall_ok(envelope, sig, bytes_check, sot, ario)
-    assert out is True  # not as strict as training
+    # All required checks pass → overall True.
+    out = _compute_overall_ok(
+        envelope,
+        {"ok": True},   # sig
+        {"ok": True},   # anchored bytes
+        {"ok": True},   # source of truth (trace tag matches artifact)
+        {"ok": True},   # ar.io
+    )
+    assert out is True
+
+    # Source of truth None (e.g., trace pruned) → overall False.
+    out = _compute_overall_ok(
+        envelope,
+        {"ok": True},
+        {"ok": True},
+        {"ok": None},   # trace gone or no payload to compare
+        {"ok": True},
+    )
+    assert out is False, "predictions with no live surface must fail overall"
+
+    # Anchored bytes None (legacy v1 prediction with no artifact) →
+    # overall False. v1 subjects can't reach v2's bar.
+    out = _compute_overall_ok(
+        envelope,
+        {"ok": True},
+        {"ok": None},   # legacy subject, no artifact
+        {"ok": None},
+        {"ok": True},
+    )
+    assert out is False, "v1 legacy predictions cannot fully verify under v2"
 
 
 def test_anchor_continues_when_upload_raises(monkeypatch, tmp_path):
@@ -1175,6 +1235,40 @@ def test_verified_model_uses_mv_source_for_load_and_integrity(monkeypatch):
 
 
 # --- CodeRabbit round 4 regressions ---------------------------------------
+
+
+def test_artifact_checksums_excludes_registration_metadata(monkeypatch, tmp_path):
+    """MLflow's create_model_version adds a ``registered_model_meta``
+    file to the artifact dir AFTER anchor() has already recorded the
+    artifact_hash for the un-registered state. Without exclusion, a
+    later VerifiedModel re-hash would falsely trip IntegrityError —
+    not because anyone tampered, but because MLflow's own bookkeeping
+    grew the file set. This test pins the exclusion contract.
+    """
+    import ario_mlflow.anchoring as anchoring
+    from ario_mlflow.anchoring import artifact_checksums
+
+    # Stage a fake artifact tree containing a registered_model_meta
+    # file alongside real model files.
+    fake_model_dir = tmp_path / "downloaded_model"
+    fake_model_dir.mkdir()
+    (fake_model_dir / "MLmodel").write_bytes(b"flavors:\n  sklearn: {}\n")
+    (fake_model_dir / "model.pkl").write_bytes(b"\x80\x04\x95fake_pickle_bytes")
+    (fake_model_dir / "registered_model_meta").write_bytes(
+        b'{"model_name": "credit-scorer", "version": "1"}'
+    )
+
+    monkeypatch.setattr(
+        anchoring.mlflow.artifacts, "download_artifacts",
+        lambda run_id, artifact_path: str(fake_model_dir),
+    )
+
+    checksums = artifact_checksums("any-run-id", artifact_path="model")
+    # Real model files hashed:
+    assert "MLmodel" in checksums
+    assert "model.pkl" in checksums
+    # registration bookkeeping NOT hashed:
+    assert "registered_model_meta" not in checksums
 
 
 def test_artifact_checksums_raises_on_download_failure(monkeypatch):
@@ -2410,13 +2504,13 @@ def test_ario_client_skips_registration_anchor_on_get_run_failure(monkeypatch, c
     source run lookup fails transiently."""
     import ario_mlflow.client as client_module
 
-    captured: dict = {"create_proof_called": False, "upload_called": False}
+    captured: dict = {"create_commitment_called": False, "upload_called": False}
 
     class _FailingClient(client_module.ArioMlflowClient):
         def __init__(self):
             # Skip MlflowClient __init__; we override everything we touch.
             self._proof_engine = type(
-                "PE", (), {"create_proof": lambda *a, **kw: (captured.__setitem__("create_proof_called", True) or {})}
+                "PE", (), {"create_commitment": lambda *a, **kw: (captured.__setitem__("create_commitment_called", True) or {})}
             )()
             self._anchor = type(
                 "A", (), {"enabled": True, "upload_proof": lambda *a, **kw: (captured.__setitem__("upload_called", True) or None)}
@@ -2435,7 +2529,7 @@ def test_ario_client_skips_registration_anchor_on_get_run_failure(monkeypatch, c
     with caplog.at_level("WARNING"):
         c._anchor_registration("fraud", "1", "run-id", "runs:/run-id/model")
 
-    assert captured["create_proof_called"] is False, (
+    assert captured["create_commitment_called"] is False, (
         "Must not mint a registration proof when source-run lookup failed"
     )
     assert captured["upload_called"] is False
@@ -2444,73 +2538,164 @@ def test_ario_client_skips_registration_anchor_on_get_run_failure(monkeypatch, c
     assert any("Skipping registration anchoring" in m for m in warnings), warnings
 
 
-# --- chain-integrity endpoint ---------------------------------------------
+# Phase 2.D removed the demo's local chain-integrity feature
+# (compute_chain_integrity + /api/chain-integrity endpoint + the
+# chain-status widget). The on-chain DAG via Arweave tags is the
+# canonical chain; per-event verify is done via the plugin's
+# full_verify. Tests for the removed local helper deleted with it.
 
 
-def _make_signed_record(payload: dict, previous_hash: str) -> dict:
-    """Build an envelope matching the store's shape for chain-integrity tests."""
-    from ario_mlflow.proof import canonical_json, hash_data
-    record_hash = hash_data(canonical_json(payload))
-    return {
-        "record": payload,
-        "record_hash": record_hash,
-        "previous_hash": previous_hash,
-        "signature": "stub",
-        "public_key": "stub",
+# --- prediction check 3 (live MLflow re-derivation via trace tag) ----------
+
+
+def test_verify_source_of_truth_for_prediction_passes_when_trace_tag_matches():
+    """Phase 2: predictions get check 3 by mirroring the canonical
+    payload onto the trace as ``ario.payload_json``. When the trace tag
+    matches the anchored artifact, source_of_truth.ok is True."""
+    from ario_mlflow.proof import canonical_json
+    from ario_mlflow.verify import verify_source_of_truth
+
+    payload = {
+        "event_type": "prediction",
+        "decision_id": "abc-123",
+        "model_name": "credit-scorer",
+        "model_version": "1",
+        "input_hash": "0xinput",
+        "output_hash": "0xoutput",
+        "latency_ms": 4.2,
+        "mlflow_trace_id": "tr-trace-1",
     }
+    payload_bytes = canonical_json(payload)
+
+    # The trace mirrors the artifact verbatim — no tampering.
+    class _Trace:
+        class info:
+            tags = {"ario.payload_json": payload_bytes.decode("utf-8")}
+
+    class _StubClient:
+        def get_trace(self, trace_id):
+            assert trace_id == "tr-trace-1"
+            return _Trace()
+
+    envelope = {"event_type": "prediction"}
+    out = verify_source_of_truth(envelope, payload_bytes, _StubClient())
+    assert out["ok"] is True, out
 
 
-def test_chain_integrity_reports_content_tamper_even_when_link_is_intact():
-    """Tampering with `record.output_hash` leaves link_intact==True but must
-    flip content_intact to False and surface the changed record.
+def test_verify_source_of_truth_for_prediction_fails_when_trace_tag_tampered():
+    """Catches the new tamper vector: someone modifies ``ario.payload_json``
+    on the MLflow trace without re-uploading the artifact (or vice versa)."""
+    from ario_mlflow.proof import canonical_json
+    from ario_mlflow.verify import verify_source_of_truth
 
-    This is the behaviour the demo's /tamper button exercises: it modifies
-    a field inside the record without touching record_hash or previous_hash,
-    so the chain links still resolve but the content no longer hashes to
-    its committed digest.
-    """
-    from app.main import compute_chain_integrity
-
-    r1 = _make_signed_record({"decision_id": "a", "output_hash": "h-a"}, "GENESIS")
-    r2 = _make_signed_record({"decision_id": "b", "output_hash": "h-b"}, r1["record_hash"])
-    r3 = _make_signed_record({"decision_id": "c", "output_hash": "h-c"}, r2["record_hash"])
-
-    # Happy path first — everything intact.
-    clean = compute_chain_integrity([r1, r2, r3])
-    assert clean["intact"] is True
-    assert clean["link_intact"] is True
-    assert clean["content_intact"] is True
-    assert clean["changed_records"] == []
-    assert clean["broken_at"] is None
-
-    # Tamper with r2's inner record (simulates the /tamper button on decision b).
-    r2["record"]["output_hash"] = "TAMPERED"
-
-    tampered = compute_chain_integrity([r1, r2, r3])
-    assert tampered["link_intact"] is True, (
-        "Link integrity should still be True — tampering didn't touch previous_hash/record_hash"
-    )
-    assert tampered["content_intact"] is False, (
-        "Content integrity must flip False when a record's content stops matching its record_hash"
-    )
-    assert tampered["intact"] is False
-    assert tampered["changed_records"] == [
-        {"index": 1, "decision_id": "b", "reason": "content hash mismatch"}
-    ]
-    # Legacy broken_at falls back to the first changed record when no link break.
-    assert tampered["broken_at"] == 1
-
-
-def test_chain_integrity_empty_store_is_intact():
-    from app.main import compute_chain_integrity
-
-    result = compute_chain_integrity([])
-    assert result == {
-        "total": 0,
-        "link_intact": True,
-        "content_intact": True,
-        "broken_link_at": None,
-        "changed_records": [],
-        "intact": True,
-        "broken_at": None,
+    payload = {
+        "event_type": "prediction",
+        "decision_id": "abc-123",
+        "model_name": "credit-scorer",
+        "model_version": "1",
+        "input_hash": "0xoriginal",
+        "output_hash": "0xoutput",
+        "latency_ms": 4.2,
+        "mlflow_trace_id": "tr-trace-2",
     }
+    payload_bytes = canonical_json(payload)
+
+    # Trace tag has been tampered: input_hash differs from artifact.
+    tampered = dict(payload)
+    tampered["input_hash"] = "0xTAMPERED"
+    tampered_json = canonical_json(tampered).decode("utf-8")
+
+    class _Trace:
+        class info:
+            tags = {"ario.payload_json": tampered_json}
+
+    class _StubClient:
+        def get_trace(self, trace_id):
+            return _Trace()
+
+    envelope = {"event_type": "prediction"}
+    out = verify_source_of_truth(envelope, payload_bytes, _StubClient())
+    assert out["ok"] is False, out
+
+
+def test_verify_source_of_truth_for_prediction_fails_when_trace_pruned():
+    """Pruned trace surfaces as a clear failure rather than a silent
+    pass — auditors see ``live_refetch_incomplete`` and can act on it."""
+    from ario_mlflow.proof import canonical_json
+    from ario_mlflow.verify import verify_source_of_truth
+
+    payload = {
+        "event_type": "prediction",
+        "decision_id": "abc-123",
+        "input_hash": "0xa",
+        "output_hash": "0xb",
+        "mlflow_trace_id": "tr-pruned",
+    }
+    payload_bytes = canonical_json(payload)
+
+    class _StubClient:
+        def get_trace(self, trace_id):
+            raise RuntimeError("trace not found (pruned)")
+
+    envelope = {"event_type": "prediction"}
+    out = verify_source_of_truth(envelope, payload_bytes, _StubClient())
+    assert out["ok"] is False, out
+    assert out.get("reason") == "live_refetch_incomplete", out
+
+
+def test_verify_source_of_truth_for_prediction_fails_without_trace_id():
+    """Old-style prediction payloads without ``mlflow_trace_id`` can't be
+    re-derived — surfaces as a clear failure with a descriptive reason."""
+    from ario_mlflow.proof import canonical_json
+    from ario_mlflow.verify import verify_source_of_truth
+
+    payload = {
+        "event_type": "prediction",
+        "decision_id": "abc-123",
+        "input_hash": "0xa",
+        "output_hash": "0xb",
+        # no mlflow_trace_id
+    }
+    payload_bytes = canonical_json(payload)
+
+    class _StubClient:
+        def get_trace(self, trace_id):
+            raise AssertionError("should never be called")
+
+    envelope = {"event_type": "prediction"}
+    out = verify_source_of_truth(envelope, payload_bytes, _StubClient())
+    assert out["ok"] is False, out
+    assert "mlflow_trace_id" in out.get("detail", ""), out
+
+
+def test_verify_source_of_truth_rejects_non_object_trace_tag():
+    """If ario.payload_json on the trace is valid JSON but not an object
+    (e.g., a tampered string, list, or number), the refetcher must fail
+    closed via LiveRefetchError instead of letting the downstream rebuild
+    crash on .update() / .keys()."""
+    from ario_mlflow.proof import canonical_json
+    from ario_mlflow.verify import verify_source_of_truth
+
+    payload = {
+        "event_type": "prediction",
+        "decision_id": "abc-123",
+        "input_hash": "0xa",
+        "output_hash": "0xb",
+        "mlflow_trace_id": "tr-bad-tag",
+    }
+    payload_bytes = canonical_json(payload)
+
+    # Trace tag has been tampered to a JSON string instead of an object.
+    class _Trace:
+        class info:
+            tags = {"ario.payload_json": '"a string instead of an object"'}
+
+    class _StubClient:
+        def get_trace(self, trace_id):
+            return _Trace()
+
+    envelope = {"event_type": "prediction"}
+    out = verify_source_of_truth(envelope, payload_bytes, _StubClient())
+    assert out["ok"] is False, out
+    assert out.get("reason") == "live_refetch_incomplete", out
+    assert "non-object" in out.get("detail", "").lower(), out

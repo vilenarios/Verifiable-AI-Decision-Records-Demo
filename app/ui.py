@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from ario_mlflow.proof import canonical_json, hash_data
+from ario_mlflow.verify import full_verify as _plugin_full_verify
 
 logger = logging.getLogger(__name__)
 
@@ -27,54 +28,124 @@ def _common_context(app):
 def _is_fully_verified(verification: dict | None) -> bool:
     """Full-verification gate shared by lifecycle status and aggregates.
 
-    Treats a record as verified only when the local hash matches, the
-    signature is valid, the permanent copy was found on Arweave, and
-    the on-chain hash matches our local record hash. Missing any one
-    (including still-propagating ``permanent_copy_found``) means the
-    record is not yet verified — not that it failed.
+    Prefers the plugin's event-aware ``overall`` verdict when present
+    (it correctly handles "source_of_truth not applicable for
+    predictions" and "ar.io below threshold"). Falls back to the
+    explicit four-field check for legacy entries written before
+    ``overall`` was persisted.
+
+    Returns ``True`` only when every applicable check passed. Missing
+    or pending checks (``None``) mean "not yet verified", not "failed".
     """
     if not verification:
         return False
+    overall = verification.get("overall")
+    if overall is True:
+        return True
+    if overall is False:
+        return False
+    # Legacy fallback: every required field must be explicitly True.
     return bool(
-        verification.get("hash_valid")
-        and verification.get("signature_valid")
-        and verification.get("permanent_copy_found")
-        and verification.get("hash_match")
+        verification.get("signature_valid") is True
+        and verification.get("permanent_copy_found") is True
+        and verification.get("hash_match") is True
     )
 
 
 def _verify_envelope(app, envelope):
-    """Run three-level verification on any proof envelope. Returns result dict."""
-    local = app.state.proof_engine.verify_local(envelope)
+    """Verify via the plugin's full_verify against the pure-commitment
+    envelope on Arweave.
+
+    The lifecycle_store / RecordStore envelope (passed in) is the demo's
+    local display cache; the actual proof being verified is the plugin's
+    pure-commitment envelope on Arweave at ``envelope["arweave_tx_id"]``.
+    This helper:
+
+    1. Fetches the plugin envelope from Arweave by TX.
+    2. Runs ``ario_mlflow.verify.full_verify`` on it (signature +
+       anchored bytes from MLflow + live MLflow re-derivation +
+       ar.io Verify attestation).
+    3. Maps the four-check result to legacy field names so existing
+       templates keep working, plus surfaces the plugin's
+       ``source_of_truth`` and ``overall`` verdicts directly so the UI
+       can render the live-MLflow-re-derivation check (the demo's
+       headline tamper-detection signal) and treat predictions
+       (which have no re-derivable source) distinctly from
+       training/registration.
+
+    Pending semantics: if the TX is set but Arweave hasn't returned the
+    envelope yet, every check field is ``None`` — templates show
+    "Not checked"/"Pending", not "FAIL". A ``False`` value in this
+    dict only ever means "the check ran and failed".
+    """
+    # Default skeleton — None means "not yet checked" (pending). A
+    # False value only appears once a check has actually run and
+    # returned a negative result.
     result = {
-        "hash_valid": local["hash_valid"],
-        "signature_valid": local["signature_valid"],
+        "signature_valid": None,
         "permanent_copy_found": False,
-        "hash_match": False,
+        "hash_match": None,
+        "source_of_truth_ok": None,
+        "source_of_truth_reason": None,
+        "overall": None,
         "attestation_level": None,
         "report_url": None,
         "attested_by": None,
         "attested_at": None,
+        "plugin_full_verify": None,
     }
 
-    if envelope.get("arweave_tx_id"):
-        arweave_data = app.state.anchor.fetch_proof(envelope["arweave_tx_id"])
-        if arweave_data:
-            arweave_hash = hash_data(canonical_json(arweave_data.get("record", {})))
-            result["permanent_copy_found"] = True
-            result["hash_match"] = arweave_hash == arweave_data.get("record_hash")
+    tx_id = envelope.get("arweave_tx_id")
+    if not tx_id:
+        return result
 
-        if app.state.ario_verify.enabled:
-            # Plugin's submit_verification returns a pre-normalized dict with
-            # attestation_level / report_url / attested_by / attested_at.
-            normalized = app.state.ario_verify.submit_verification(envelope["arweave_tx_id"])
-            if normalized:
-                result["attestation_level"] = normalized.get("attestation_level")
-                result["report_url"] = normalized.get("report_url")
-                result["attested_by"] = normalized.get("attested_by")
-                result["attested_at"] = normalized.get("attested_at")
+    plugin_envelope = app.state.anchor.fetch_proof(tx_id)
+    if not plugin_envelope:
+        # Pending: TX exists but the gateway hasn't indexed it yet, or
+        # a transient fetch error. Leave check fields as None so the
+        # UI shows "Pending", not "FAIL".
+        return result
 
-    return result, local
+    # Inject TX so verify_ario_attestation can call ar.io Verify.
+    plugin_envelope["_tx_id"] = tx_id
+
+    # Plugin's full_verify needs the demo's MlflowClient for check 2
+    # (download payload.json) and check 3 (re-derive from live state).
+    settings = app.state.settings
+    mlflow.set_tracking_uri(settings.mlflow_tracking_uri)
+    mlflow_client = mlflow.tracking.MlflowClient()
+
+    full_result = _plugin_full_verify(
+        plugin_envelope,
+        proof_engine=app.state.proof_engine,
+        mlflow_client=mlflow_client,
+        ario_client=app.state.ario_verify,
+    )
+
+    # Map the four-check structure to legacy field names + surface the
+    # source_of_truth and overall verdicts the templates need to render
+    # the headline tamper-detection lesson honestly.
+    sig = full_result.get("signature", {}) or {}
+    anchored = full_result.get("anchored_bytes", {}) or {}
+    sot = full_result.get("source_of_truth", {}) or {}
+    ario = full_result.get("ario_attestation", {}) or {}
+
+    result["signature_valid"] = sig.get("ok")
+    result["permanent_copy_found"] = anchored.get("payload_bytes") is not None
+    result["hash_match"] = anchored.get("ok")
+    # source_of_truth.ok is None for predictions (no re-derivable
+    # MLflow state) and True/False for training/registration. The
+    # UI treats None as "Not applicable" for predictions.
+    result["source_of_truth_ok"] = sot.get("ok")
+    result["source_of_truth_reason"] = sot.get("reason")
+    result["overall"] = full_result.get("overall")
+    result["attestation_level"] = ario.get("attestation_level")
+    result["report_url"] = ario.get("report_url")
+    result["attested_by"] = ario.get("attested_by")
+    result["attested_at"] = ario.get("attested_at")
+    result["plugin_full_verify"] = full_result
+
+    return result
 
 
 @router.get("/ui/predictions")
@@ -210,44 +281,30 @@ def decision_detail(request: Request, decision_id: str, verify: bool = False):
     if not envelope:
         return HTMLResponse("<h1>Decision not found</h1>", status_code=404)
 
-    # Local verification (always — instant, no network)
-    local = app.state.proof_engine.verify_local(envelope)
-
-    # Full verification (on-demand — user-triggered via ?verify=true)
+    # Phase 2.C: verify via the plugin's full_verify against the on-chain
+    # envelope — same pattern as the run_detail / model_chain paths and
+    # /verify/{decision_id} (app/main.py). Fetches the new pure-commitment
+    # envelope from Arweave and runs signature + anchored-bytes + ar.io
+    # checks. Source-of-truth check is None for predictions per the
+    # plugin's design (predictions don't have re-derivable MLflow state
+    # beyond the anchored payload itself).
+    #
+    # The legacy ``proof_engine.verify_local(envelope)`` "always-on local
+    # cache integrity" check was removed in Phase 2.C. It was the
+    # mechanism behind today's single-button tamper detection (modify
+    # local cache → local hash differs). Per redesign Part 8 + the
+    # design principle "MLflow is the system of record, the cache is
+    # just a UI display", local-cache integrity is not part of the trust
+    # model. Phase 3 reintroduces tamper UX with four buttons paired to
+    # the four real checks (signature / anchored bytes / live MLflow /
+    # ar.io). Tracked as task #42.
     if verify and envelope.get("arweave_tx_id"):
-        result = {
-            "verified_at": datetime.now(timezone.utc).isoformat(),
-            "hash_valid": local["hash_valid"],
-            "signature_valid": local["signature_valid"],
-            "permanent_copy_found": False,
-            "hash_match": False,
-            "attestation_level": None,
-            "report_url": None,
-            "pdf_url": None,
-            "attested_by": None,
-            "attested_at": None,
-        }
-
-        # Fetch from ar.io gateway and compare
-        arweave_data = app.state.anchor.fetch_proof(envelope["arweave_tx_id"])
-        if arweave_data:
-            arweave_hash = hash_data(canonical_json(arweave_data.get("record", {})))
-            result["permanent_copy_found"] = True
-            result["hash_match"] = arweave_hash == arweave_data.get("record_hash")
-
-        # ar.io Verify attestation. Plugin's submit_verification returns a
-        # pre-normalized dict — no second _normalize_result call needed.
-        if app.state.ario_verify.enabled:
-            normalized = app.state.ario_verify.submit_verification(envelope["arweave_tx_id"])
-            if normalized:
-                result["attestation_level"] = normalized.get("attestation_level")
-                result["report_url"] = normalized.get("report_url")
-                result["pdf_url"] = normalized.get("pdf_url")
-                result["attested_by"] = normalized.get("attested_by")
-                result["attested_at"] = normalized.get("attested_at")
-
-        # Persist results on the envelope
-        envelope["last_verification"] = result
+        result = _verify_envelope(app, envelope)
+        result["verified_at"] = datetime.now(timezone.utc).isoformat()
+        # plugin_full_verify carries raw payload_bytes; not JSON-serializable.
+        # Mapped legacy fields are sufficient for cached display.
+        persistable = {k: v for k, v in result.items() if k != "plugin_full_verify"}
+        envelope["last_verification"] = persistable
         app.state.store.update(decision_id, envelope)
 
     # Check Turbo status for anchored records (fast, single HTTP call)
@@ -261,7 +318,11 @@ def decision_detail(request: Request, decision_id: str, verify: bool = False):
         {
             **_common_context(app),
             "envelope": envelope,
-            "local_verification": local,
+            # local_verification kept as None for template back-compat; the
+            # template's "fall back to local" branches now show "Not
+            # checked" instead. Removed entirely once template is
+            # fully migrated in Phase 3.
+            "local_verification": None,
             "turbo_status": turbo_status,
         },
     )
@@ -275,12 +336,15 @@ def run_detail(request: Request, run_id: str, verify: bool = False):
     if not envelope:
         return HTMLResponse("<h1>Training run not found</h1>", status_code=404)
 
-    local = app.state.proof_engine.verify_local(envelope)
-
     if verify and envelope.get("arweave_tx_id"):
-        result, _ = _verify_envelope(app, envelope)
+        result = _verify_envelope(app, envelope)
         result["verified_at"] = datetime.now(timezone.utc).isoformat()
-        envelope["last_verification"] = result
+        # ``plugin_full_verify`` carries raw ``payload_bytes`` which
+        # aren't JSON-serializable. Drop it from the persisted form;
+        # the mapped legacy fields above are sufficient for cached
+        # display. A re-verify recomputes the full structure on demand.
+        persistable = {k: v for k, v in result.items() if k != "plugin_full_verify"}
+        envelope["last_verification"] = persistable
         app.state.lifecycle_store.update(envelope["record"]["event_id"], envelope)
 
     turbo_status = None
@@ -315,7 +379,6 @@ def run_detail(request: Request, run_id: str, verify: bool = False):
         {
             **_common_context(app),
             "envelope": envelope,
-            "local_verification": local,
             "turbo_status": turbo_status,
             "mlflow_ario_tags": ario_tags,
             # Pass the configured URI verbatim — evaluators run the
@@ -344,21 +407,23 @@ def model_chain(request: Request, model_name: str, version: str, verify: bool = 
         elif r.get("event_type") == "model_registered" and r.get("model_name") == model_name and str(r.get("model_version")) == str(version):
             registration_env = rec
 
-    # Local verification for each
-    training_local = app.state.proof_engine.verify_local(training_env) if training_env else None
-    registration_local = app.state.proof_engine.verify_local(registration_env) if registration_env else None
-
     # Full verification (on-demand)
     training_verify = None
     registration_verify = None
     if verify:
         if training_env:
-            training_verify, _ = _verify_envelope(app, training_env)
-            training_env["last_verification"] = training_verify
+            training_verify = _verify_envelope(app, training_env)
+            # Strip non-JSON-serializable raw bytes from plugin_full_verify
+            # before persisting (see run_detail comment).
+            training_env["last_verification"] = {
+                k: v for k, v in training_verify.items() if k != "plugin_full_verify"
+            }
             app.state.lifecycle_store.update(training_env["record"]["event_id"], training_env)
         if registration_env:
-            registration_verify, _ = _verify_envelope(app, registration_env)
-            registration_env["last_verification"] = registration_verify
+            registration_verify = _verify_envelope(app, registration_env)
+            registration_env["last_verification"] = {
+                k: v for k, v in registration_verify.items() if k != "plugin_full_verify"
+            }
             app.state.lifecycle_store.update(registration_env["record"]["event_id"], registration_env)
 
     # Prediction summary
@@ -371,7 +436,7 @@ def model_chain(request: Request, model_name: str, version: str, verify: bool = 
     anchored_count = sum(1 for p in model_predictions if p.get("arweave_tx_id"))
     verified_count = sum(
         1 for p in model_predictions
-        if not p.get("tampered") and _is_fully_verified(p.get("last_verification"))
+        if _is_fully_verified(p.get("last_verification"))
     )
 
     # Turbo status for each
@@ -390,10 +455,8 @@ def model_chain(request: Request, model_name: str, version: str, verify: bool = 
             "model_name": model_name,
             "version": version,
             "training": training_env,
-            "training_local": training_local,
             "training_turbo": training_turbo,
             "registration": registration_env,
-            "registration_local": registration_local,
             "registration_turbo": registration_turbo,
             "prediction_count": len(model_predictions),
             "anchored_count": anchored_count,

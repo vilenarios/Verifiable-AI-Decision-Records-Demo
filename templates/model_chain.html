@@ -44,6 +44,7 @@
         }
         .chain-dot-green { border-color: var(--green); background: var(--green-bg); }
         .chain-dot-yellow { border-color: var(--yellow); background: var(--yellow-bg); }
+        .chain-dot-red { border-color: var(--red); background: var(--red-bg); }
         .chain-dot-gray { border-color: var(--muted); background: var(--gray-bg); }
 
         .chain-card {
@@ -134,8 +135,19 @@
             <div class="chain-node">
                 {% if training %}
                     {% set tv = training.get('last_verification') %}
-                    {% set t_ok = training_local and training_local.hash_valid and training_local.signature_valid %}
-                    <div class="chain-dot {% if tv and tv.permanent_copy_found and tv.hash_match %}chain-dot-green{% elif t_ok %}chain-dot-yellow{% else %}chain-dot-gray{% endif %}"></div>
+                    {# "Pending ar.io" only applies if every required check passed
+                       (sig + hash AND source-of-truth). The plugin treats
+                       source_of_truth_ok=None as a real failure for training/
+                       registration/prediction (all in _REQUIRES_FULL_MLFLOW_VERIFICATION),
+                       so we require the explicit True here — anything else is a
+                       real fail and should render red, not yellow. #}
+                    {% set t_pending_attestation = tv and tv.overall is sameas false
+                        and tv.signature_valid is sameas true
+                        and tv.hash_match is sameas true
+                        and tv.source_of_truth_ok is sameas true
+                        and tv.attestation_level and tv.attestation_level < 2 %}
+                    {% set t_real_fail = tv and tv.overall is sameas false and not t_pending_attestation %}
+                    <div class="chain-dot {% if tv and tv.overall is sameas true %}chain-dot-green{% elif t_real_fail %}chain-dot-red{% elif training.arweave_tx_id %}chain-dot-yellow{% else %}chain-dot-gray{% endif %}"></div>
                 {% else %}
                     <div class="chain-dot chain-dot-gray"></div>
                 {% endif %}
@@ -144,7 +156,7 @@
                         <h3>{% if training %}<a href="/ui/runs/{{ training.record.run_id }}" style="color: inherit;">Training Run</a>{% else %}Training Run{% endif %}</h3>
                         {% if training %}
                             {% set tv = training.get('last_verification') %}
-                            {% if tv and tv.hash_valid and tv.permanent_copy_found and tv.hash_match %}
+                            {% if tv and tv.overall is sameas true %}
                                 <span class="badge badge-green"><span class="badge-dot"></span> Verified</span>
                             {% elif training.arweave_tx_id %}
                                 <span class="badge badge-yellow"><span class="badge-dot"></span> Anchored</span>
@@ -192,17 +204,35 @@
                             {% endif %}
                         </div>
 
-                        {% if training_local %}
+                        {% set tv = training.get('last_verification') %}
+                        {% if tv %}
                         <div class="verify-inline">
-                            <span>Hash <span class="{{ 'check' if training_local.hash_valid else 'cross' }}">{{ 'PASS' if training_local.hash_valid else 'FAIL' }}</span></span>
-                            <span>Signature <span class="{{ 'check' if training_local.signature_valid else 'cross' }}">{{ 'PASS' if training_local.signature_valid else 'FAIL' }}</span></span>
-                            {% set tv = training.get('last_verification') %}
-                            {% if tv %}
-                                <span>Permanent Copy <span class="{{ 'check' if tv.permanent_copy_found else 'unchecked' }}">{{ 'Found' if tv.permanent_copy_found else 'Pending' }}</span></span>
+                            <span>Signature
+                                {% if tv.signature_valid is sameas true %}<span class="check">PASS</span>
+                                {% elif tv.signature_valid is sameas false %}<span class="cross">FAIL</span>
+                                {% else %}<span class="unchecked">Pending</span>{% endif %}
+                            </span>
+                            <span>Permanent Copy
                                 {% if tv.permanent_copy_found %}
-                                <span>Hash Match <span class="{{ 'check' if tv.hash_match else 'cross' }}">{{ 'PASS' if tv.hash_match else 'FAIL' }}</span></span>
+                                    <span class="check">Found</span>
+                                {% elif tv.overall is sameas false %}
+                                    <span class="cross">Missing</span>
+                                {% else %}
+                                    <span class="unchecked">Pending</span>
                                 {% endif %}
-                                {% if tv.attestation_level %}
+                            </span>
+                            <span>Anchored Bytes
+                                {% if tv.hash_match is sameas true and tv.permanent_copy_found %}<span class="check">PASS</span>
+                                {% elif tv.hash_match is sameas false %}<span class="cross">FAIL</span>
+                                {% else %}<span class="unchecked">Pending</span>{% endif %}
+                            </span>
+                            <span>Source of Truth
+                                {% if tv.source_of_truth_ok is sameas true %}<span class="check">PASS</span>
+                                {% elif tv.source_of_truth_ok is sameas false %}<span class="cross">FAIL</span>
+                                {% elif tv.source_of_truth_reason %}<span class="unchecked">N/A</span>
+                                {% else %}<span class="unchecked">Pending</span>{% endif %}
+                            </span>
+                            {% if tv.attestation_level %}
                                 <span title="ar.io Verify Level {{ tv.attestation_level }}">Attestation
                                     <span class="check">
                                         {% if tv.attestation_level == 3 %}Cryptographically verified
@@ -212,9 +242,8 @@
                                     </span>
                                 </span>
                                 {% endif %}
-                                {% if tv.attested_by %}
-                                <span title="An ar.io gateway operator ran the verification above and cryptographically signed the result with their wallet.">Attested by <strong>{{ tv.attested_by }}</strong></span>
-                                {% endif %}
+                            {% if tv.attested_by %}
+                            <span title="An ar.io gateway operator ran the verification above and cryptographically signed the result with their wallet.">Attested by <strong>{{ tv.attested_by }}</strong></span>
                             {% endif %}
                         </div>
                         {% endif %}
@@ -241,8 +270,13 @@
             <div class="chain-node">
                 {% if registration %}
                     {% set rv = registration.get('last_verification') %}
-                    {% set r_ok = registration_local and registration_local.hash_valid and registration_local.signature_valid %}
-                    <div class="chain-dot {% if rv and rv.permanent_copy_found and rv.hash_match %}chain-dot-green{% elif r_ok %}chain-dot-yellow{% else %}chain-dot-gray{% endif %}"></div>
+                    {% set r_pending_attestation = rv and rv.overall is sameas false
+                        and rv.signature_valid is sameas true
+                        and rv.hash_match is sameas true
+                        and rv.source_of_truth_ok is sameas true
+                        and rv.attestation_level and rv.attestation_level < 2 %}
+                    {% set r_real_fail = rv and rv.overall is sameas false and not r_pending_attestation %}
+                    <div class="chain-dot {% if rv and rv.overall is sameas true %}chain-dot-green{% elif r_real_fail %}chain-dot-red{% elif registration.arweave_tx_id %}chain-dot-yellow{% else %}chain-dot-gray{% endif %}"></div>
                 {% else %}
                     <div class="chain-dot chain-dot-gray"></div>
                 {% endif %}
@@ -251,7 +285,7 @@
                         <h3>Model Registration</h3>
                         {% if registration %}
                             {% set rv = registration.get('last_verification') %}
-                            {% if rv and rv.hash_valid and rv.permanent_copy_found and rv.hash_match %}
+                            {% if rv and rv.overall is sameas true %}
                                 <span class="badge badge-green"><span class="badge-dot"></span> Verified</span>
                             {% elif registration.arweave_tx_id %}
                                 <span class="badge badge-yellow"><span class="badge-dot"></span> Anchored</span>
@@ -306,29 +340,46 @@
                             {% endif %}
                         </div>
 
-                        {% if registration_local %}
+                        {% set rv = registration.get('last_verification') %}
+                        {% if rv %}
                         <div class="verify-inline">
-                            <span>Hash <span class="{{ 'check' if registration_local.hash_valid else 'cross' }}">{{ 'PASS' if registration_local.hash_valid else 'FAIL' }}</span></span>
-                            <span>Signature <span class="{{ 'check' if registration_local.signature_valid else 'cross' }}">{{ 'PASS' if registration_local.signature_valid else 'FAIL' }}</span></span>
-                            {% set rv = registration.get('last_verification') %}
-                            {% if rv %}
-                                <span>Permanent Copy <span class="{{ 'check' if rv.permanent_copy_found else 'unchecked' }}">{{ 'Found' if rv.permanent_copy_found else 'Pending' }}</span></span>
+                            <span>Signature
+                                {% if rv.signature_valid is sameas true %}<span class="check">PASS</span>
+                                {% elif rv.signature_valid is sameas false %}<span class="cross">FAIL</span>
+                                {% else %}<span class="unchecked">Pending</span>{% endif %}
+                            </span>
+                            <span>Permanent Copy
                                 {% if rv.permanent_copy_found %}
-                                <span>Hash Match <span class="{{ 'check' if rv.hash_match else 'cross' }}">{{ 'PASS' if rv.hash_match else 'FAIL' }}</span></span>
+                                    <span class="check">Found</span>
+                                {% elif rv.overall is sameas false %}
+                                    <span class="cross">Missing</span>
+                                {% else %}
+                                    <span class="unchecked">Pending</span>
                                 {% endif %}
-                                {% if rv.attestation_level %}
-                                <span title="ar.io Verify Level {{ rv.attestation_level }}">Attestation
-                                    <span class="check">
-                                        {% if rv.attestation_level == 3 %}Cryptographically verified
-                                        {% elif rv.attestation_level == 2 %}Content integrity confirmed
-                                        {% elif rv.attestation_level == 1 %}Finalized on Arweave
-                                        {% else %}Level {{ rv.attestation_level }}{% endif %}
-                                    </span>
+                            </span>
+                            <span>Anchored Bytes
+                                {% if rv.hash_match is sameas true and rv.permanent_copy_found %}<span class="check">PASS</span>
+                                {% elif rv.hash_match is sameas false %}<span class="cross">FAIL</span>
+                                {% else %}<span class="unchecked">Pending</span>{% endif %}
+                            </span>
+                            <span>Source of Truth
+                                {% if rv.source_of_truth_ok is sameas true %}<span class="check">PASS</span>
+                                {% elif rv.source_of_truth_ok is sameas false %}<span class="cross">FAIL</span>
+                                {% elif rv.source_of_truth_reason %}<span class="unchecked">N/A</span>
+                                {% else %}<span class="unchecked">Pending</span>{% endif %}
+                            </span>
+                            {% if rv.attestation_level %}
+                            <span title="ar.io Verify Level {{ rv.attestation_level }}">Attestation
+                                <span class="check">
+                                    {% if rv.attestation_level == 3 %}Cryptographically verified
+                                    {% elif rv.attestation_level == 2 %}Content integrity confirmed
+                                    {% elif rv.attestation_level == 1 %}Finalized on Arweave
+                                    {% else %}Level {{ rv.attestation_level }}{% endif %}
                                 </span>
-                                {% endif %}
-                                {% if rv.attested_by %}
-                                <span title="An ar.io gateway operator ran the verification above and cryptographically signed the result with their wallet.">Attested by <strong>{{ rv.attested_by }}</strong></span>
-                                {% endif %}
+                            </span>
+                            {% endif %}
+                            {% if rv.attested_by %}
+                            <span title="An ar.io gateway operator ran the verification above and cryptographically signed the result with their wallet.">Attested by <strong>{{ rv.attested_by }}</strong></span>
                             {% endif %}
                         </div>
                         {% endif %}
