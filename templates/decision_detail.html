@@ -135,7 +135,6 @@
             font-size: 0.85rem;
         }
         .verify-row + .verify-row { border-top: 1px solid var(--border); }
-        .verify-divider { border-top: 2px solid var(--border); margin-top: 0.25rem; padding-top: 0.5rem; }
         .check { color: var(--green); font-weight: 600; }
         .cross { color: var(--red); font-weight: 600; }
         .unchecked { color: var(--muted); font-size: 0.8rem; }
@@ -151,14 +150,6 @@
             color: var(--muted);
             margin-top: 0.5rem;
         }
-        .verify-note {
-            margin-top: 0.75rem;
-            padding: 0.6rem 0.75rem;
-            border-radius: 6px;
-            font-size: 0.8rem;
-        }
-        .verify-note-warn { background: var(--yellow-bg); color: var(--yellow); border: 1px solid var(--yellow); }
-        .verify-note-ok { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
 
         @media (max-width: 768px) {
             .grid { grid-template-columns: 1fr; }
@@ -169,13 +160,13 @@
         {% set v = envelope.get('last_verification') %}
 
         <div class="page-header">
-            <div class="page-header-left">
+            <div>
                 <h1>Decision Record</h1>
                 <div class="page-id">{{ envelope.record.decision_id }}</div>
             </div>
             <div class="page-actions">
                 <a id="verify-btn" href="/ui/decisions/{{ envelope.record.decision_id }}?verify=true" class="btn btn-primary btn-sm" data-loading-text="Verifying..." {% if not envelope.arweave_tx_id %}style="display:none;"{% endif %}>Verify with ar.io</a>
-                <a href="/api/export/{{ envelope.record.decision_id }}" class="btn btn-outline btn-sm">Download Proof</a>
+                <a id="view-proof-btn" href="https://turbo-gateway.com/{{ envelope.arweave_tx_id }}" target="_blank" rel="noopener" class="btn btn-outline btn-sm" {% if not envelope.arweave_tx_id %}style="display:none;"{% endif %}>View Proof ↗</a>
                 {# Phase 2.C removed the single tamper button. The legacy
                    tamper modified a local JSON cache, but local-cache
                    integrity isn't part of the new trust model (MLflow is
@@ -187,377 +178,325 @@
         </div>
 
         <div class="grid">
-            <!-- Prediction -->
+            <!-- Decision -->
             <div class="section">
-                <div class="section-header">Prediction</div>
-                <div class="section-body">
-                    <div class="kv">
-                        <div class="kv-row">
-                            <span class="kv-key">Class</span>
-                            <span class="kv-value"><span class="badge badge-primary">{{ envelope.record.prediction['class'] }}</span></span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Index</span>
-                            <span class="kv-value">{{ envelope.record.prediction.class_index }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Features</span>
-                            <span class="kv-value">{{ envelope.record.prediction.features_used | join(', ') }}</span>
-                        </div>
-                    </div>
-                    <div style="margin-top: 0.75rem;">
-                        {% for cls, prob in envelope.record.prediction.probabilities.items() %}
-                        <div class="prob-row">
-                            <span class="prob-label">{{ cls }}</span>
-                            <div class="prob-track">
-                                <div class="prob-fill" style="width: {{ (prob * 100) }}%"></div>
-                            </div>
-                            <span class="prob-value">{{ "%.4f"|format(prob) }}</span>
-                        </div>
-                        {% endfor %}
-                    </div>
+              <div class="section-header">Decision</div>
+              <div class="section-body">
+                <div class="kv">
+                  <div class="kv-row">
+                    <span class="kv-key">Result</span>
+                    <span class="kv-value">
+                      {% if envelope.record.prediction['class'] == 'approve' %}
+                        <span class="badge badge-green"><span class="badge-dot"></span> Approved</span>
+                      {% elif envelope.record.prediction['class'] == 'deny' %}
+                        <span class="badge badge-red"><span class="badge-dot"></span> Denied</span>
+                      {% else %}
+                        {{ envelope.record.prediction['class'] }}
+                      {% endif %}
+                    </span>
+                  </div>
+                  <div class="kv-row">
+                    <span class="kv-key">Confidence</span>
+                    <span class="kv-value">{{ "%.1f"|format(envelope.record.prediction.probabilities[envelope.record.prediction['class']] * 100) }}%</span>
+                  </div>
+                  <div class="kv-row">
+                    <span class="kv-key">Features</span>
+                    <span class="kv-value">{{ envelope.record.prediction.features_used | join(', ') }}</span>
+                  </div>
                 </div>
+                <div style="margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--border);">
+                  <div style="font-size: 0.7rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 0.4rem;">Class probabilities</div>
+                  {% for cls, prob in envelope.record.prediction.probabilities.items() %}
+                  <div class="prob-row">
+                    <span class="prob-label">{{ cls.title() }}</span>
+                    <div class="prob-track">
+                      <div class="prob-fill" style="width: {{ (prob * 100) }}%"></div>
+                    </div>
+                    <span class="prob-value">{{ "%.4f"|format(prob) }}</span>
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
             </div>
 
             <!-- ar.io Verification -->
             <div class="section">
                 <div class="section-header">ar.io Verification</div>
                 <div class="section-body">
-                    <div style="font-size:0.78rem;color:var(--muted);line-height:1.5;margin-bottom:0.75rem;">
-                        Independent checks on the proof record. These verify that <em>what was anchored</em> is intact on the Arweave network — they do <strong>not</strong> speak to whether the decision itself was correct.
-                    </div>
-                    <div class="verify-row" title="Ed25519 signature on the on-chain pure-commitment envelope, verified against the embedded public_key.">
-                        <span>Signature</span>
-                        {% if v %}
-                            {% if v.signature_valid is sameas true %}
-                                <span class="check">PASS</span>
-                            {% elif v.signature_valid is sameas false %}
-                                <span class="cross">FAIL</span>
-                            {% else %}
-                                <span class="badge badge-yellow">Pending</span>
-                            {% endif %}
-                        {% else %}
-                            <span class="unchecked">Not checked</span>
-                        {% endif %}
-                    </div>
-                    <div class="verify-row" title="The canonical bytes anchored alongside the proof (ario/payload.json in MLflow) re-hash to the envelope's payload_hash.">
-                        <span>Anchored Bytes Intact</span>
-                        {% if v %}
-                            {% if v.hash_match is sameas false %}
-                                {# Real check-2 failure: artifact missing,
-                                   unreadable, or hash mismatch. Show FAIL
-                                   even if permanent_copy_found is also False
-                                   (the artifact may have been deleted). #}
-                                <span class="cross">FAIL</span>
-                            {% elif v.permanent_copy_found and v.hash_match is sameas true %}
-                                <span class="check">PASS</span>
-                            {% else %}
-                                <span class="badge badge-yellow">Pending</span>
-                            {% endif %}
-                        {% else %}
-                            <span class="unchecked">Not checked</span>
-                        {% endif %}
-                    </div>
-                    <div class="verify-row" title="Live MLflow state re-derives to the same canonical bytes that were anchored. For predictions, the trace tag ario.payload_json is re-fetched and compared to the artifact. This is the check that catches MLflow tampering of either surface.">
-                        <span>Source of Truth Matches</span>
-                        {% if v %}
-                            {% if v.source_of_truth_ok is sameas true %}
-                                <span class="check">PASS</span>
-                            {% elif v.source_of_truth_ok is sameas false %}
-                                <span class="cross">FAIL</span>
-                            {% else %}
-                                <span class="badge badge-yellow">Pending</span>
-                            {% endif %}
-                        {% else %}
-                            <span class="unchecked">Not checked</span>
-                        {% endif %}
-                    </div>
-                    <div class="verify-row">
-                        <span>Attestation</span>
-                        {% if v and v.attestation_level %}
-                            <span>
-                                {% if v.attestation_level == 3 %}
-                                    <span class="badge badge-green" title="ar.io Verify Level 3 — the digital signature on this record has been independently verified using the original signer's public key. This is a mathematical proof, not a trust claim: the record is intact and attributable to the stated signer."><span class="badge-dot"></span> Cryptographically verified</span>
-                                    <span style="margin-left:0.4rem;font-size:0.72rem;color:var(--muted);">Level 3</span>
-                                {% elif v.attestation_level == 2 %}
-                                    <span class="badge badge-yellow" title="ar.io Verify Level 2 — ar.io downloaded the raw record and independently recomputed its SHA-256 fingerprint. The bytes match the gateway's digest, confirming content integrity. Cryptographic signature verification still pending."><span class="badge-dot"></span> Content integrity confirmed</span>
-                                    <span style="margin-left:0.4rem;font-size:0.72rem;color:var(--muted);">Level 2</span>
-                                {% elif v.attestation_level == 1 %}
-                                    <span class="badge badge-yellow" title="ar.io Verify Level 1 — the record was found in a confirmed block on the Arweave network at a specific block height and timestamp. On Arweave, a confirmed block means the data is permanently stored. Content and signature verification still to come."><span class="badge-dot"></span> Finalized on Arweave</span>
-                                    <span style="margin-left:0.4rem;font-size:0.72rem;color:var(--muted);">Level 1</span>
-                                {% endif %}
-                            </span>
-                        {% elif v %}
-                            <span class="badge badge-yellow">Pending</span>
-                        {% else %}
-                            <span class="unchecked">Not checked</span>
-                        {% endif %}
-                    </div>
+                  <div style="font-size:0.78rem;color:var(--muted);line-height:1.5;margin-bottom:0.75rem;">
+                    Independent verification of MLflow data integrity. These verify this decision record matches the original proof anchored with ar.io at runtime — they do <strong>not</strong> speak to whether the decision itself was correct.
+                  </div>
 
-                    {% if v and v.attested_by %}
-                    <div class="verify-row" title="An ar.io gateway operator ran the verification above and cryptographically signed the result with their wallet. This is an independent statement on the ar.io network, separate from the verification itself.">
-                        <span>Attested by</span>
-                        <span>
-                            <strong>{{ v.attested_by }}</strong>
-                            <span style="margin-left:0.35rem;font-size:0.72rem;color:var(--muted);">independent ar.io operator</span>
-                            {% if v.attested_at %}
-                                <div style="font-size:0.72rem;color:var(--muted);margin-top:0.15rem;">{{ v.attested_at[:19] }}Z</div>
-                            {% endif %}
-                        </span>
-                    </div>
-                    {% endif %}
-
-                    <div class="verify-row verify-divider">
-                        <strong>Overall</strong>
-                        {% if v %}
-                            {% if v.overall is sameas true %}
-                                <strong class="check" title="All applicable checks passed. The signed commitment, the anchored canonical bytes, the live MLflow state (where applicable), and ar.io's attestation all agree.">PROOF CONFIRMED</strong>
-                            {% elif v.overall is sameas false and v.signature_valid is sameas true and v.hash_match is sameas true and v.source_of_truth_ok is sameas true and v.attestation_level and v.attestation_level < 2 %}
-                                {# All required checks (sig + anchored + source-of-truth)
-                                   passed; only ar.io attestation is still propagating from
-                                   L1 to L2-3. The plugin treats source_of_truth_ok=None
-                                   as a real failure for every event type we anchor
-                                   (prediction / training / registration are all in
-                                   _REQUIRES_FULL_MLFLOW_VERIFICATION), so we must NOT
-                                   accept None here — that would silently soften a real
-                                   plugin verdict. #}
-                                <span class="badge badge-yellow" title="Cryptographic + source-of-truth checks passed. ar.io's attestation is still propagating from Level 1 → Level 2-3 (typically 2-5 minutes after upload). Re-verify in a few minutes.">Pending ar.io confirmation</span>
-                            {% elif v.overall is sameas false %}
-                                <strong class="cross" title="At least one check failed. See the rows above for details.">FAILED</strong>
-                            {% else %}
-                                <span class="badge badge-yellow">Pending</span>
-                            {% endif %}
-                        {% else %}
-                            <span class="unchecked">Not verified</span>
-                        {% endif %}
-                    </div>
-
-                    {% if v and not v.permanent_copy_found and v.signature_valid %}
-                    <div class="verify-note verify-note-warn">
-                        {% if turbo_status and turbo_status.status == 'FINALIZED' %}
-                            Data is permanent on Arweave but couldn't be fetched. This may be a temporary gateway issue — try again.
-                        {% elif turbo_status and turbo_status.status == 'CONFIRMED' %}
-                            Proof is confirmed but hasn't finalized on Arweave yet. Try again later.
-                        {% else %}
-                            Proof was uploaded but isn't available for verification yet. Try again in a few minutes.
-                        {% endif %}
-                    </div>
-                    {% endif %}
-
-                    {% if v and v.permanent_copy_found %}
-                    <div class="verify-actions">
-                        {% if v.report_url %}
-                        <a href="{{ v.report_url }}" target="_blank" class="btn btn-outline btn-sm">View Report</a>
-                        {% endif %}
-                        {% if v.pdf_url %}
-                        <a href="{{ v.pdf_url }}" target="_blank" class="btn btn-outline btn-sm">Download PDF</a>
-                        {% endif %}
-                    </div>
-                    <div class="verify-meta">
-                        {% if v.attested_by %}Attested by <strong>{{ v.attested_by }}</strong>{% endif %}{% if v.attested_at %} at {{ v.attested_at[:19] }}Z{% endif %}{% if not v.attested_by %}Last verified: {{ v.verified_at[:19] }}Z{% endif %}
-                    </div>
-                    {% endif %}
-
-                    {% if not v and envelope.arweave_tx_id %}
-                    <div class="verify-meta">
-                        Click <strong>Verify with ar.io</strong> to fetch the on-chain commitment and run the full verification flow.
-                    </div>
-                    {% endif %}
-
-                    {% if envelope.arweave_tx_id %}
-                    <details style="margin-top: 0.75rem; font-size: 0.8rem; color: var(--muted);">
-                        <summary style="cursor: pointer; font-weight: 600; color: var(--black); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.03em;">How to verify independently</summary>
-                        <div style="margin-top: 0.5rem; line-height: 1.6;">
-                            <p>1. Fetch the pure-commitment envelope from Arweave:</p>
-                            <code style="display: block; background: var(--surface); padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0.25rem 0 0.5rem; font-size: 0.7rem; word-break: break-all; font-family: 'JetBrains Mono', monospace;">curl https://turbo-gateway.com/raw/{{ envelope.arweave_tx_id }}</code>
-                            <p>2. Verify the Ed25519 <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">signature</code> using the embedded <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">public_key</code>. The signed body is the envelope minus the <code>signature</code> field, JCS-canonicalized (RFC&nbsp;8785).</p>
-                            <p style="margin-top: 0.25rem;">3. Download the canonical bytes from MLflow:</p>
-                            <code style="display: block; background: var(--surface); padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0.25rem 0 0.5rem; font-size: 0.7rem; word-break: break-all; font-family: 'JetBrains Mono', monospace;">mlflow artifacts download -r &lt;run_id&gt; -a ario/predictions/&lt;decision_id&gt;/payload.json</code>
-                            <p>Compute <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">SHA-256</code> of those raw bytes and compare to the envelope's <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">payload_hash</code>.</p>
-                            <p style="margin-top: 0.25rem;">4. Verify <code style="font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;">previous_hash</code> matches the model version's registration TX (chain integrity).</p>
-                            <p style="margin-top: 0.25rem; font-style: italic;">Or run <code style="font-family: 'JetBrains Mono', monospace;">ario-mlflow verify trace {{ envelope.record.trace_id }}</code> for all four checks at once: signature, anchored-bytes intact, source-of-truth (re-fetches the trace's <code>ario.payload_json</code> tag and compares to the artifact), and ar.io attestation.</p>
-                        </div>
-                    </details>
-                    {% endif %}
-                </div>
-            </div>
-
-            <!-- Decision Record -->
-            <div class="section">
-                <div class="section-header">Decision Record</div>
-                <div class="section-body">
-                    <div class="kv">
-                        <div class="kv-row">
-                            <span class="kv-key">Decision ID</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.decision_id }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Timestamp</span>
-                            <span class="kv-value">{{ envelope.record.timestamp }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Input Hash</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.input_hash }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Output Hash</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.output_hash }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Latency</span>
-                            <span class="kv-value">{{ envelope.record.latency_ms }} ms</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ar.io anchoring (TX + upload receipt together) -->
-            <div class="section" id="anchoring-section">
-                <div class="section-header">ar.io anchoring</div>
-                <div class="section-body" id="anchoring-body">
-                    {% if envelope.arweave_tx_id %}
-                    <div class="kv">
-                        <div class="kv-row">
-                            <span class="kv-key">Transaction</span>
-                            <span class="kv-value"><a href="{{ envelope.arweave_url }}" target="_blank"><span class="mono mono-sm">{{ envelope.arweave_tx_id }}</span></a></span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Status</span>
-                            <span class="kv-value" id="turbo-status-badge">
-                                {% if turbo_status and turbo_status.status == 'FINALIZED' %}
-                                    <span class="badge badge-green" title="The proof is permanently stored on the Arweave network and cannot be changed."><span class="badge-dot"></span> Permanent on ar.io</span>
-                                {% elif turbo_status and turbo_status.status == 'CONFIRMED' %}
-                                    <span class="badge badge-yellow" title="ar.io has received and confirmed the proof. It will become permanent once block confirmations accumulate."><span class="badge-dot"></span> Confirmed on ar.io</span>
-                                {% elif turbo_status and turbo_status.status == 'NOT_FOUND' %}
-                                    <span class="badge badge-yellow" title="The proof has been submitted but ar.io has not yet indexed it."><span class="badge-dot badge-dot-pulse"></span> Uploading to ar.io…</span>
-                                {% else %}
-                                    <span class="badge badge-yellow" title="Proof received by ar.io."><span class="badge-dot"></span> Anchored</span>
-                                {% endif %}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div id="anchoring-receipt" style="margin-top:1rem;padding-top:0.9rem;border-top:1px solid var(--border);">
-                        <div style="font-size:0.72rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.1rem;">Upload receipt</div>
-                        <div style="font-size:0.75rem;color:var(--muted);margin-bottom:0.6rem;">Independent timestamp witness — ar.io's signature of what it received, when.</div>
-                        <div class="kv" id="receipt-kv">
-                            {% if envelope.turbo_receipt %}
-                                {% if envelope.turbo_receipt.timestamp %}
-                                <div class="kv-row">
-                                    <span class="kv-key">Timestamp</span>
-                                    <span class="kv-value mono">{{ envelope.turbo_receipt.timestamp }} ms</span>
-                                </div>
-                                {% endif %}
-                                {% if envelope.turbo_receipt.owner %}
-                                <div class="kv-row">
-                                    <span class="kv-key">Owner</span>
-                                    <span class="kv-value mono mono-sm">{{ envelope.turbo_receipt.owner }}</span>
-                                </div>
-                                {% endif %}
-                                {% if envelope.turbo_receipt.version %}
-                                <div class="kv-row">
-                                    <span class="kv-key">Version</span>
-                                    <span class="kv-value">{{ envelope.turbo_receipt.version }}</span>
-                                </div>
-                                {% endif %}
-                                {% if envelope.turbo_receipt.deadlineHeight %}
-                                <div class="kv-row">
-                                    <span class="kv-key">Deadline</span>
-                                    <span class="kv-value mono">{{ envelope.turbo_receipt.deadlineHeight }}</span>
-                                </div>
-                                {% endif %}
-                                {% if envelope.turbo_receipt.signature %}
-                                <div class="kv-row">
-                                    <span class="kv-key">Signature</span>
-                                    <span class="kv-value mono mono-sm">{{ envelope.turbo_receipt.signature[:64] }}...</span>
-                                </div>
-                                {% endif %}
-                            {% else %}
-                                <div class="kv-row" id="receipt-placeholder" style="color:var(--muted);font-size:0.82rem;">
-                                    Waiting for receipt — will populate automatically.
-                                </div>
-                            {% endif %}
-                        </div>
-                    </div>
-                    {% elif arweave_enabled %}
-                    <div style="display: flex; align-items: center; gap: 0.5rem; color: var(--yellow); font-size: 0.85rem;">
-                        <span class="badge badge-yellow"><span class="badge-dot badge-dot-pulse"></span> Anchoring</span>
-                        <span style="color: var(--muted);">Uploading proof to Arweave...</span>
-                    </div>
+                  <div class="verify-row" title="The proof exists on Arweave and ar.io can locate it. FAIL means the on-chain anchor is missing or unreachable.">
+                    <span>Proof Found</span>
+                    {% if v %}
+                      {% if v.permanent_copy_found is sameas true %}
+                        <span class="check">PASS</span>
+                      {% elif envelope.arweave_tx_id and v.signature_valid is none and v.hash_match is none %}
+                        {# Verifier hasn't run yet (no fetch attempted). #}
+                        <span class="badge badge-yellow">Pending</span>
+                      {% elif envelope.arweave_tx_id %}
+                        <span class="check">PASS</span>
+                      {% else %}
+                        <span class="unchecked">Not checked</span>
+                      {% endif %}
                     {% else %}
-                    <div style="color: var(--muted); font-size: 0.85rem;">Not anchored — no wallet configured.</div>
+                      <span class="unchecked">Not checked</span>
                     {% endif %}
-                </div>
-            </div>
+                  </div>
 
-            {# Phase 2.D removed the legacy "Proof Layer" panel that
-               displayed record_hash / previous_hash / signature /
-               public_key. Those were a local-cache proof, not the
-               actual on-chain commitment. The verifiable artifact is
-               now the pure-commitment envelope on Arweave (fetchable
-               via the "Verify with ar.io" button). Phase 3 introduces
-               a side-by-side viewer of the signed commitment + the
-               canonical bytes that were committed to. #}
+                  <div class="verify-row" title="The data in MLflow (both the saved canonical bytes and the live state) hashes to the same value that was anchored on Arweave. ar.io independently re-verifies the bytes. FAIL means MLflow data has been tampered with since anchoring.">
+                    <span>Decision Record Matches</span>
+                    {% if v %}
+                      {% if v.hash_match is sameas false or v.source_of_truth_ok is sameas false %}
+                        <span class="cross">FAIL</span>
+                      {% elif v.permanent_copy_found and v.hash_match is sameas true and v.source_of_truth_ok is sameas true %}
+                        <span class="check">PASS</span>
+                      {% else %}
+                        <span class="badge badge-yellow">Pending</span>
+                      {% endif %}
+                    {% else %}
+                      <span class="unchecked">Not checked</span>
+                    {% endif %}
+                  </div>
 
-            <!-- Model Lineage -->
-            <div class="section">
-                <div class="section-header">Model Lineage</div>
-                <div class="section-body">
-                    <div class="kv">
-                        <div class="kv-row">
-                            <span class="kv-key">Model</span>
-                            <span class="kv-value">{{ envelope.record.model_name }} / v{{ envelope.record.model_version }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Run ID</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.mlflow_run_id }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Artifact</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.artifact_uri }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Lineage</span>
-                            <span class="kv-value"><a href="/ui/models/{{ envelope.record.model_name }}/{{ envelope.record.model_version }}">View model lineage &rarr;</a></span>
-                        </div>
+                  <div class="verify-row" title="The proof carries a valid signature from the user who issued it. ar.io independently re-verifies the signature. FAIL means the proof was altered after signing.">
+                    <span>Signature Confirmed</span>
+                    {% if v %}
+                      {% if v.signature_valid is sameas true %}
+                        <span class="check">PASS</span>
+                      {% elif v.signature_valid is sameas false %}
+                        <span class="cross">FAIL</span>
+                      {% else %}
+                        <span class="badge badge-yellow">Pending</span>
+                      {% endif %}
+                    {% else %}
+                      <span class="unchecked">Not checked</span>
+                    {% endif %}
+                  </div>
+
+                  {% if v and v.attested_by %}
+                  <div class="verify-row" title="An ar.io gateway operator ran the verification above and cryptographically signed the result with their wallet. Independent statement on the ar.io network, separate from the verification itself.">
+                    <span>Attested by</span>
+                    <span style="text-align: right;">
+                      <strong>{{ v.attested_by }}</strong>
+                      <span style="font-size:0.7rem;color:var(--muted);margin-left:0.35rem;">independent ar.io operator</span>
+                      {% if v.attested_at %}
+                        <div style="font-size:0.7rem;color:var(--muted);margin-top:0.15rem;">{{ v.attested_at[:19] }}Z</div>
+                      {% endif %}
+                    </span>
+                  </div>
+                  {% endif %}
+
+                  <div class="verify-row" style="border-top: 1px solid var(--border); padding-top: 0.75rem; margin-top: 0.25rem;">
+                    <strong style="font-size: 0.85rem;">Overall</strong>
+                    {% if v %}
+                      {% if v.overall is sameas true %}
+                        <strong class="check">PASS</strong>
+                      {% elif v.overall is sameas false and v.signature_valid is sameas true and v.hash_match is sameas true and v.source_of_truth_ok is sameas true and v.attestation_level and v.attestation_level < 2 %}
+                        <span class="badge badge-yellow" title="Cryptographic + source-of-truth checks passed. ar.io's attestation is still propagating from Level 1 → Level 2-3 (typically 2-5 minutes after upload). Re-verify in a few minutes.">Pending ar.io confirmation</span>
+                      {% elif v.overall is sameas false %}
+                        <strong class="cross">FAIL</strong>
+                      {% else %}
+                        <span class="badge badge-yellow">Pending</span>
+                      {% endif %}
+                    {% else %}
+                      <span class="unchecked">Not verified</span>
+                    {% endif %}
+                  </div>
+
+                  <details style="margin-top: 0.85rem; font-size: 0.75rem; color: var(--muted); border-top: 1px solid var(--border); padding-top: 0.75rem;">
+                    <summary style="cursor: pointer; font-weight: 600; color: var(--black); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em;">▶ How to verify independently</summary>
+                    <div style="margin-top: 0.5rem; line-height: 1.6;">
+                      <p>1. Fetch the pure-commitment envelope from Arweave:</p>
+                      <code style="display: block; background: var(--surface); padding: 0.4rem 0.6rem; border-radius: 4px; margin: 0.25rem 0 0.5rem; font-size: 0.7rem; word-break: break-all; font-family: 'JetBrains Mono', monospace;">curl https://turbo-gateway.com/raw/{{ envelope.arweave_tx_id }}</code>
+                      <p>2. Verify the Ed25519 signature using the embedded public_key (the signed body is the envelope minus the signature field, JCS-canonicalized).</p>
+                      <p style="margin-top: 0.25rem;">3. Download the canonical bytes from MLflow and confirm SHA-256 matches the envelope's payload_hash.</p>
+                      <p style="margin-top: 0.25rem; font-style: italic;">Or run <code style="font-family: 'JetBrains Mono', monospace;">ario-mlflow verify trace {{ envelope.record.trace_id }}</code> for all checks at once.</p>
                     </div>
+                  </details>
                 </div>
             </div>
 
-            <!-- Trace Context -->
-            <div class="section">
-                <div class="section-header">Trace Context</div>
-                <div class="section-body">
-                    <div class="kv">
-                        <div class="kv-row">
-                            <span class="kv-key">Service</span>
-                            <span class="kv-value">{{ envelope.record.service_name }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Trace ID</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.trace_id }}</span>
-                        </div>
-                        <div class="kv-row">
-                            <span class="kv-key">Span ID</span>
-                            <span class="kv-value mono mono-sm">{{ envelope.record.span_id }}</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
         </div>
+
+        <!-- 2x2 audit context grid -->
+        <div class="grid-2-audit" style="margin-top: 1rem;">
+
+          <div class="section">
+            <div class="section-header">Model</div>
+            <div class="section-body">
+              <div class="kv-row"><span class="kv-key">Name</span><span class="kv-value">{{ envelope.record.model_name }}</span></div>
+              <div class="kv-row"><span class="kv-key">Version</span><span class="kv-value">v{{ envelope.record.model_version }}</span></div>
+              <div class="kv-row"><span class="kv-key">Run ID</span><span class="kv-value"><a class="mono" href="/ui/runs/{{ envelope.record.mlflow_run_id }}" style="word-break: break-all; text-decoration: none;">{{ envelope.record.mlflow_run_id }}</a></span></div>
+              <div class="kv-row"><span class="kv-key">Lineage</span><span class="kv-value"><a href="/ui/models/{{ envelope.record.model_name }}/{{ envelope.record.model_version }}" style="text-decoration: none; color: var(--primary);">View model lineage →</a></span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Inference</div>
+            <div class="section-body">
+              <div class="kv-row"><span class="kv-key">Timestamp</span><span class="kv-value">{{ envelope.record.timestamp }}</span></div>
+              <div class="kv-row"><span class="kv-key">Latency</span><span class="kv-value">{{ envelope.record.latency_ms }} ms</span></div>
+              <div class="kv-row"><span class="kv-key">Input Hash</span><span class="kv-value mono mono-sm">{{ envelope.record.input_hash }}</span></div>
+              <div class="kv-row"><span class="kv-key">Output Hash</span><span class="kv-value mono mono-sm">{{ envelope.record.output_hash }}</span></div>
+            </div>
+          </div>
+
+          <div class="section">
+            <div class="section-header">Trace</div>
+            <div class="section-body">
+              <div class="kv-row"><span class="kv-key">Service</span><span class="kv-value">{{ envelope.record.service_name }}</span></div>
+              <div class="kv-row"><span class="kv-key">Trace ID</span><span class="kv-value mono mono-sm">{{ envelope.record.trace_id }}</span></div>
+              <div class="kv-row"><span class="kv-key">Span ID</span><span class="kv-value mono mono-sm">{{ envelope.record.span_id }}</span></div>
+            </div>
+          </div>
+
+          <div class="section" id="anchoring-section">
+            <div class="section-header">ar.io Anchor</div>
+            <div class="section-body" id="anchoring-body">
+              {% if envelope.arweave_tx_id %}
+              <div class="kv-row"><span class="kv-key">Transaction</span><span class="kv-value mono mono-sm">{{ envelope.arweave_tx_id }}</span></div>
+              <div class="kv-row"><span class="kv-key">Status</span><span class="kv-value" id="turbo-status-badge">
+                {% if turbo_status and turbo_status.status in ('FINALIZED', 'CONFIRMED') %}
+                  <span class="badge badge-green"><span class="badge-dot"></span> Confirmed</span>
+                {% elif turbo_status and turbo_status.status == 'NOT_FOUND' %}
+                  <span class="badge badge-yellow"><span class="badge-dot badge-dot-pulse"></span> Anchoring</span>
+                {% else %}
+                  <span class="badge badge-yellow"><span class="badge-dot"></span> Anchoring</span>
+                {% endif %}
+              </span></div>
+              {% if envelope.public_key %}
+              <div class="kv-row"><span class="kv-key">Signer Key</span><span class="kv-value mono mono-sm">ed25519:{{ envelope.public_key }}</span></div>
+              {% endif %}
+              {% if envelope.turbo_receipt and envelope.turbo_receipt.deadlineHeight %}
+              <div class="kv-row"><span class="kv-key">Block</span><span class="kv-value">{{ "{:,}".format(envelope.turbo_receipt.deadlineHeight) }}</span></div>
+              {% endif %}
+              {% else %}
+              <div class="kv-row" style="color: var(--muted);">Not anchored — no wallet configured.</div>
+              {% endif %}
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ─── Demonstrate Tampering ─── -->
+        <div class="section-label">Demonstrate Tampering</div>
+
+        <details class="tamper-section" id="tamper-section">
+          <summary class="tamper-header">
+            <div class="tamper-header-inner">
+              <span class="tamper-summary-icon"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1 L7 5 L3 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+              <span class="tamper-summary-title">Click to tamper</span>
+              <span class="tamper-summary-hint">simulate two attacks</span>
+            </div>
+          </summary>
+          <div class="tamper-body">
+            <div class="tamper-intro">
+              Two ways someone could try to alter this decision record after the fact — both hit MLflow data, both get caught by the same verification check. Click to see how. Tampers auto-reverse after a short window, or click <em>Reset all</em>.
+            </div>
+            <div class="tamper-row">
+              <div class="tamper-row-info">
+                <div class="tamper-row-title"><span class="num">1</span>Tamper with the saved record</div>
+                <div class="tamper-row-desc">Edit the locally-saved copy of the decision data. <em style="font-family: 'JetBrains Mono', monospace; color: var(--muted); font-style: normal;">Overwrites <code>ario/payload.json</code> in MLflow.</em> <strong>Breaks → Decision Record Matches.</strong></div>
+              </div>
+              <button class="btn-tamper" data-tamper-kind="saved" data-event-type="decision" data-event-id="{{ envelope.record.decision_id }}">Tamper</button>
+            </div>
+            <div class="tamper-row">
+              <div class="tamper-row-info">
+                <div class="tamper-row-title"><span class="num">2</span>Tamper with the live data</div>
+                <div class="tamper-row-desc">Mutate MLflow's underlying record — the same thing an admin with registry access could do. <em style="font-family: 'JetBrains Mono', monospace; color: var(--muted); font-style: normal;">Overwrites the <code>ario.payload_json</code> trace tag.</em> <strong>Breaks → Decision Record Matches.</strong></div>
+                <span class="tamper-headline">★ Headline tamper for governance audiences</span>
+              </div>
+              <button class="btn-tamper" data-tamper-kind="live" data-event-type="decision" data-event-id="{{ envelope.record.decision_id }}">Tamper</button>
+            </div>
+            <div class="tamper-footer">
+              <div style="font-size: 0.74rem; color: var(--muted); line-height: 1.45; font-style: italic;">Both tampers hit different surfaces but the system catches each one — data tampering anywhere in MLflow shows up as the same broken check.</div>
+              <div style="display: flex; align-items: center; padding-top: 0.45rem; border-top: 1px solid var(--border);">
+                <span class="tamper-footer-text">Tampers auto-reverse after a short window. Reset clears all.</span>
+                <button class="btn-reset" data-event-type="decision" data-event-id="{{ envelope.record.decision_id }}">Reset all</button>
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <!-- ─── How verification works ─── -->
+        <div class="section-label">How verification works</div>
+
+        <details class="collapsible">
+          <summary>
+            <span class="collapsible-summary-icon"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1 L7 5 L3 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            <span class="collapsible-summary-title">Show the canonical bytes ↔ signed commitment</span>
+            <span class="collapsible-summary-hint">click to expand</span>
+          </summary>
+          <div class="collapsible-body">
+            <div class="viewer-intro">
+              The proof has two parts. Ar.io anchors a tiny <strong>signed commitment</strong> — just hashes and a signature, no source data. MLflow stores the <strong>canonical bytes</strong> that produced the hash. Anyone with both can verify they match.
+            </div>
+
+            <div class="proof-split">
+              <div class="panel">
+                <div class="panel-header">
+                  <div class="panel-title-row"><div class="panel-title">Canonical bytes</div><span class="panel-source-pill pill-mlflow">MLflow</span></div>
+                  <div class="panel-meta">JCS canonicalized · the source · what gets hashed</div>
+                </div>
+                <div class="panel-body">
+                  <div class="json-block" id="canonical-bytes-json">{% if canonical_bytes_json %}{{ canonical_bytes_json }}{% else %}<em style="color:var(--muted)">Click <strong>Verify with ar.io</strong> first to fetch and show the canonical bytes.</em>{% endif %}</div>
+                </div>
+                <div class="panel-footer">
+                  <span style="font-family: 'JetBrains Mono', monospace;">ario/predictions/{{ envelope.record.decision_id }}/payload.json</span>
+                </div>
+              </div>
+
+              <div class="panel">
+                <div class="panel-header">
+                  <div class="panel-title-row"><div class="panel-title">Signed commitment</div><span class="panel-source-pill pill-arweave">ar.io</span></div>
+                  <div class="panel-meta">~500 bytes · permanent · public · the witness</div>
+                </div>
+                <div class="panel-body">
+                  <div class="json-block" id="signed-commitment-json">{% if signed_commitment_json %}{{ signed_commitment_json }}{% else %}<em style="color:var(--muted)">Click <strong>Verify with ar.io</strong> first to fetch and show the signed commitment.</em>{% endif %}</div>
+                </div>
+                <div class="panel-footer">
+                  {% if envelope.arweave_tx_id %}
+                  <span>TX <span style="font-family: 'JetBrains Mono', monospace; color: var(--primary);">{{ envelope.arweave_tx_id }}</span></span>
+                  <a href="https://turbo-gateway.com/{{ envelope.arweave_tx_id }}" target="_blank" rel="noopener">View on ar.io →</a>
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+
+            <div class="equality">
+              <span class="equality-prefix">Verifier recomputes:</span>
+              <div class="equality-formula">
+                <span class="eq-token eq-left">SHA-256(canonical bytes)</span>
+                <span class="eq-op">=</span>
+                <span class="eq-token eq-right">payload_hash</span>
+                {% if v and v.hash_match is sameas true %}
+                  <span class="eq-result">✓ matches</span>
+                {% elif v and v.hash_match is sameas false %}
+                  <span class="eq-result eq-result-fail">✗ doesn't match</span>
+                {% endif %}
+              </div>
+            </div>
+
+            <div class="legend-row">
+              <div><strong>What you can't do.</strong> Change either side without breaking the equality. The signature on the signed commitment binds <code style="font-family: 'JetBrains Mono', monospace;">payload_hash</code> to the signer's key.</div>
+              <div><strong>What this isn't.</strong> Canonical bytes contain hashes of input/output, not the values themselves — predictions stay private.</div>
+            </div>
+          </div>
+        </details>
 {% endblock %}
 
 {% block scripts %}
     {% if arweave_enabled %}
     <script>
     (function() {
-        // Unified polling loop covering THREE async things:
-        //   1. The Arweave TX + gateway URL (arrives ~1-2s after prediction).
-        //   2. The upload receipt (arrives in the same envelope shortly after).
+        // Unified polling loop covering three async things:
+        //   1. The Arweave TX (arrives ~1-2s after prediction).
+        //   2. The Turbo upload receipt (arrives shortly after).
         //   3. The Turbo status, which progresses NOT_FOUND → CONFIRMED →
         //      FINALIZED over seconds-to-minutes as the network settles.
-        // Stops once Turbo reports FINALIZED, or after a hard 5-minute cap
-        // so we're not polling forever on a stuck proof.
+        // Stops once Turbo reports FINALIZED, or after a hard 5-minute cap.
         const decisionId = "{{ envelope.record.decision_id }}";
         let haveTx = {{ 'true' if envelope.arweave_tx_id else 'false' }};
         let haveReceipt = {{ 'true' if envelope.turbo_receipt else 'false' }};
@@ -569,19 +508,19 @@
             FINALIZED: {
                 cls: 'badge-green',
                 dot: 'badge-dot',
-                text: 'Permanent on ar.io',
+                text: 'Confirmed',
                 title: 'The proof is permanently stored on the Arweave network and cannot be changed.',
             },
             CONFIRMED: {
-                cls: 'badge-yellow',
+                cls: 'badge-green',
                 dot: 'badge-dot',
-                text: 'Confirmed on ar.io',
+                text: 'Confirmed',
                 title: 'ar.io has received and confirmed the proof. It will become permanent once block confirmations accumulate.',
             },
             NOT_FOUND: {
                 cls: 'badge-yellow',
                 dot: 'badge-dot badge-dot-pulse',
-                text: 'Uploading to ar.io…',
+                text: 'Anchoring',
                 title: 'The proof has been submitted but ar.io has not yet indexed it.',
             },
         };
@@ -589,23 +528,9 @@
             return STATUS_COPY[s] || {
                 cls: 'badge-yellow',
                 dot: 'badge-dot',
-                text: 'Anchored',
+                text: 'Anchoring',
                 title: 'Proof received by ar.io.',
             };
-        }
-
-        // All render functions below build DOM via createElement + textContent /
-        // setAttribute rather than innerHTML concatenation. External strings
-        // (arweave_url, arweave_tx_id, receipt.*) never reach the HTML parser.
-
-        function safeHttpUrl(url) {
-            if (!url) return null;
-            try {
-                const u = new URL(url);
-                return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
-            } catch (e) {
-                return null;
-            }
         }
 
         function makeStatusBadge(turboStatus) {
@@ -620,96 +545,7 @@
             return badge;
         }
 
-        function renderAnchoringTop(data) {
-            // First render after TX arrives. Includes a placeholder status
-            // badge that later polls will overwrite via updateStatusBadge.
-            const body = document.getElementById("anchoring-body");
-            if (!body) return;
-            body.replaceChildren();
-
-            // Transaction row — anchor tag with validated URL + text-only TX id.
-            const safeUrl = safeHttpUrl(data.arweave_url);
-            const txSpan = document.createElement("span");
-            txSpan.className = "mono mono-sm";
-            txSpan.textContent = data.arweave_tx_id || "";
-            let txValue;
-            if (safeUrl) {
-                const a = document.createElement("a");
-                a.setAttribute("href", safeUrl);
-                a.setAttribute("target", "_blank");
-                a.setAttribute("rel", "noopener noreferrer");
-                a.appendChild(txSpan);
-                txValue = a;
-            } else {
-                txValue = txSpan;
-            }
-
-            const kv = document.createElement("div");
-            kv.className = "kv";
-
-            const txRow = document.createElement("div");
-            txRow.className = "kv-row";
-            const txKey = document.createElement("span");
-            txKey.className = "kv-key";
-            txKey.textContent = "Transaction";
-            const txValueWrap = document.createElement("span");
-            txValueWrap.className = "kv-value";
-            txValueWrap.appendChild(txValue);
-            txRow.append(txKey, txValueWrap);
-            kv.appendChild(txRow);
-
-            const statusRow = document.createElement("div");
-            statusRow.className = "kv-row";
-            const statusKey = document.createElement("span");
-            statusKey.className = "kv-key";
-            statusKey.textContent = "Status";
-            const statusValue = document.createElement("span");
-            statusValue.className = "kv-value";
-            statusValue.id = "turbo-status-badge";
-            statusValue.appendChild(makeStatusBadge(data.turbo_status));
-            statusRow.append(statusKey, statusValue);
-            kv.appendChild(statusRow);
-
-            body.appendChild(kv);
-
-            // Receipt section — static skeleton; renderReceipt() fills rows.
-            const receipt = document.createElement("div");
-            receipt.id = "anchoring-receipt";
-            receipt.style.cssText = "margin-top:1rem;padding-top:0.9rem;border-top:1px solid var(--border);";
-
-            const title = document.createElement("div");
-            title.style.cssText = "font-size:0.72rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.04em;margin-bottom:0.1rem;";
-            title.textContent = "Upload receipt";
-
-            const subtitle = document.createElement("div");
-            subtitle.style.cssText = "font-size:0.75rem;color:var(--muted);margin-bottom:0.6rem;";
-            subtitle.textContent = "Independent timestamp witness — ar.io’s signature of what it received, when.";
-
-            const receiptKv = document.createElement("div");
-            receiptKv.className = "kv";
-            receiptKv.id = "receipt-kv";
-
-            const waiting = document.createElement("div");
-            waiting.className = "kv-row";
-            waiting.id = "receipt-placeholder";
-            waiting.style.cssText = "color:var(--muted);font-size:0.82rem;";
-            waiting.textContent = "Waiting for receipt — will populate automatically.";
-            receiptKv.appendChild(waiting);
-
-            receipt.append(title, subtitle, receiptKv);
-            body.appendChild(receipt);
-
-            const verifyBtn = document.getElementById("verify-btn");
-            if (verifyBtn) verifyBtn.style.display = "";
-        }
-
-        function updateStatusBadge(turboStatus) {
-            const el = document.getElementById("turbo-status-badge");
-            if (!el) return;
-            el.replaceChildren(makeStatusBadge(turboStatus));
-        }
-
-        function makeReceiptRow(keyText, valueText, extraClass) {
+        function makeKvRow(keyText, valueText, extraClass) {
             const row = document.createElement("div");
             row.className = "kv-row";
             const key = document.createElement("span");
@@ -722,41 +558,65 @@
             return row;
         }
 
-        function renderReceipt(receipt) {
-            const kv = document.getElementById("receipt-kv");
-            if (!kv) return;
-            kv.replaceChildren();
+        function renderAnchoringTop(data) {
+            // First render after TX arrives. Audit grid format: TX, Status,
+            // and (when receipt later arrives) Signer Key + Block rows.
+            const body = document.getElementById("anchoring-body");
+            if (!body) return;
+            body.replaceChildren();
 
-            if (receipt.timestamp != null) {
-                kv.appendChild(makeReceiptRow("Timestamp", receipt.timestamp + " ms", "mono"));
-            }
-            if (receipt.owner) {
-                kv.appendChild(makeReceiptRow("Owner", String(receipt.owner), "mono mono-sm"));
-            }
-            if (receipt.version) {
-                kv.appendChild(makeReceiptRow("Version", String(receipt.version)));
-            }
-            if (receipt.deadlineHeight) {
-                kv.appendChild(makeReceiptRow("Deadline", String(receipt.deadlineHeight), "mono"));
-            }
-            if (receipt.signature) {
-                const sig = String(receipt.signature).substring(0, 64) + "...";
-                kv.appendChild(makeReceiptRow("Signature", sig, "mono mono-sm"));
-            }
+            body.appendChild(makeKvRow("Transaction", data.arweave_tx_id || "", "mono mono-sm"));
 
-            if (!kv.firstChild) {
-                const empty = document.createElement("div");
-                empty.className = "kv-row";
-                empty.style.cssText = "color:var(--muted);font-size:0.82rem;";
-                empty.textContent = "Receipt returned no fields.";
-                kv.appendChild(empty);
+            const statusRow = document.createElement("div");
+            statusRow.className = "kv-row";
+            const statusKey = document.createElement("span");
+            statusKey.className = "kv-key";
+            statusKey.textContent = "Status";
+            const statusValue = document.createElement("span");
+            statusValue.className = "kv-value";
+            statusValue.id = "turbo-status-badge";
+            statusValue.appendChild(makeStatusBadge(data.turbo_status));
+            statusRow.append(statusKey, statusValue);
+            body.appendChild(statusRow);
+
+            const verifyBtn = document.getElementById("verify-btn");
+            if (verifyBtn) verifyBtn.style.display = "";
+            // Reveal + retarget the View Proof link as soon as the TX
+            // arrives — the link was hidden in the initial render because
+            // arweave_tx_id wasn't set yet.
+            const proofBtn = document.getElementById("view-proof-btn");
+            if (proofBtn && data.arweave_tx_id) {
+                proofBtn.style.display = "";
+                proofBtn.href = "https://turbo-gateway.com/" + data.arweave_tx_id;
+            }
+        }
+
+        function updateStatusBadge(turboStatus) {
+            const el = document.getElementById("turbo-status-badge");
+            if (!el) return;
+            el.replaceChildren(makeStatusBadge(turboStatus));
+        }
+
+        function appendReceiptRows(envelope) {
+            // Append Signer Key + Block rows once the receipt lands.
+            const body = document.getElementById("anchoring-body");
+            if (!body) return;
+            if (envelope.public_key && !document.getElementById("signer-key-row")) {
+                const row = makeKvRow("Signer Key", "ed25519:" + envelope.public_key, "mono mono-sm");
+                row.id = "signer-key-row";
+                body.appendChild(row);
+            }
+            const receipt = envelope.turbo_receipt || {};
+            if (receipt.deadlineHeight && !document.getElementById("block-row")) {
+                const block = Number(receipt.deadlineHeight).toLocaleString();
+                const row = makeKvRow("Block", block);
+                row.id = "block-row";
+                body.appendChild(row);
             }
         }
 
         const poll = setInterval(function() {
             attempts += 1;
-            // Keep polling until we actually have the Turbo receipt — the
-            // upstream can return FINALIZED before the receipt surfaces.
             if (attempts > maxAttempts || (lastStatus === 'FINALIZED' && haveReceipt)) {
                 clearInterval(poll);
                 return;
@@ -770,7 +630,7 @@
                     }
                     if (!haveReceipt && data.turbo_receipt) {
                         haveReceipt = true;
-                        renderReceipt(data.turbo_receipt);
+                        appendReceiptRows(data);
                     }
                     const newStatus = (data.turbo_status || {}).status || null;
                     if (haveTx && newStatus !== lastStatus) {
@@ -783,4 +643,83 @@
     })();
     </script>
     {% endif %}
+
+    <script>
+    // Tamper button wiring
+    document.querySelectorAll('.btn-tamper').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const kind = btn.dataset.tamperKind;
+        const eventType = btn.dataset.eventType;
+        const eventId = btn.dataset.eventId;
+        btn.disabled = true;
+        btn.textContent = 'Tampering...';
+        try {
+          const r = await fetch(`/tamper/${kind}/${eventType}/${eventId}`, { method: 'POST' });
+          const data = await r.json();
+          if (data.tampered) {
+            btn.textContent = 'Tampered';
+            const sec = document.getElementById('tamper-section');
+            if (sec) sec.style.boxShadow = '0 0 0 2px var(--yellow)';
+            setTimeout(() => {
+              if (sec) sec.style.boxShadow = '';
+              btn.textContent = 'Tamper';
+              btn.disabled = false;
+            }, 4000);
+          } else {
+            btn.textContent = 'Failed';
+            btn.disabled = false;
+          }
+        } catch (e) {
+          btn.textContent = 'Error';
+          btn.disabled = false;
+        }
+      });
+    });
+
+    document.querySelectorAll('.btn-reset').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const eventType = btn.dataset.eventType;
+        const eventId = btn.dataset.eventId;
+        btn.disabled = true;
+        btn.textContent = 'Resetting...';
+        try {
+          const r = await fetch(`/tamper/reset/${eventType}/${eventId}`, { method: 'POST' });
+          let data = {};
+          try { data = await r.json(); } catch (_) { /* non-JSON body, treat as failure */ }
+          if (!r.ok || !data.reset) {
+            btn.textContent = 'Reset failed';
+            btn.disabled = false;
+            return;
+          }
+          btn.textContent = 'Reset — re-verify';
+          setTimeout(() => {
+            btn.textContent = 'Reset all';
+            btn.disabled = false;
+          }, 2500);
+        } catch (e) {
+          btn.textContent = 'Error';
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // Highlight the payload_hash line in the signed commitment panel.
+    (function() {
+      const el = document.getElementById('signed-commitment-json');
+      if (!el || !el.textContent) return;
+      const text = el.textContent;
+      // Skip if it's the placeholder (italic em element).
+      if (el.querySelector('em')) return;
+      const lines = text.split('\n');
+      const highlighted = lines.map(line => {
+        if (line.trim().startsWith('"payload_hash"')) {
+          // Escape the line for HTML (basic XSS guard for safety).
+          const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return '<span class="payload-hash-line">' + escaped + '</span>';
+        }
+        return line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      });
+      el.innerHTML = highlighted.join('\n');
+    })();
+    </script>
 {% endblock %}

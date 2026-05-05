@@ -22,6 +22,7 @@ from ario_mlflow.arweave import ArweaveAnchor
 from ario_mlflow.verify import ArioVerifyClient
 from app.model import load_model, predict, train_and_register_with_params, FEATURE_NAMES
 from app.ui import router as ui_router
+from app import tamper as tamper_mod
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -688,25 +689,86 @@ def get_lifecycle_event(request: Request, event_id: str):
     return envelope
 
 
-@app.get("/api/export/{decision_id}")
-def export_decision(request: Request, decision_id: str):
-    """Download a decision record as a JSON file."""
-    envelope = request.app.state.store.get_by_id(decision_id)
-    if not envelope:
-        return JSONResponse({"error": "Decision not found"}, status_code=404)
-    import json
-    content = json.dumps(envelope, indent=2)
-    return Response(
-        content=content,
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="decision-{decision_id[:8]}.json"'},
-    )
-
-
 # Phase 2.D removed:
 # - ``compute_chain_integrity`` + ``/api/chain-integrity`` endpoint
 # - ``/tamper/{decision_id}`` endpoint
-# Both depended on the demo's legacy local-cache hash chain, which is
-# no longer part of the trust model. Phase 3 reintroduces tamper UX
-# with four buttons paired to the four real checks (signature /
-# anchored bytes / live MLflow / ar.io). See task #42.
+# Phase 3 removed:
+# - ``/api/export/{decision_id}`` endpoint — replaced by direct
+#   ar.io gateway link in the ``View Proof ↗`` button on
+#   templates/decision_detail.html. Arweave is the source of truth
+#   for the proof; a server-rendered JSON export is no longer needed.
+# Phase 3 reintroduces tamper UX with two buttons per page paired to
+# the verification rows.
+
+
+# Tamper routes mutate live MLflow state and are intended for the
+# public demo only. They register only when ``demo_mode`` is True
+# (the default; override with VAIDR_DEMO_MODE=false in production).
+if get_settings().demo_mode:
+
+    @app.post("/tamper/saved/{event_type}/{event_id}")
+    def tamper_saved_route(request: Request, event_type: str, event_id: str,
+                           background_tasks: BackgroundTasks):
+        if event_type not in ("decision", "training", "registration"):
+            return JSONResponse({"error": "unknown event_type"}, status_code=400)
+        settings = request.app.state.settings
+        try:
+            tamper_mod.tamper_saved(
+                event_type, event_id,
+                lifecycle_store=request.app.state.lifecycle_store,
+                record_store=request.app.state.store,
+                tracking_uri=settings.mlflow_tracking_uri,
+            )
+        except KeyError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        background_tasks.add_task(_scheduled_revert, request.app, event_type, event_id)
+        return {"tampered": True, "kind": "saved", "event_id": event_id,
+                "ttl_seconds": tamper_mod.TAMPER_TTL_SECONDS}
+
+    @app.post("/tamper/live/{event_type}/{event_id}")
+    def tamper_live_route(request: Request, event_type: str, event_id: str,
+                          background_tasks: BackgroundTasks):
+        if event_type not in ("decision", "training", "registration"):
+            return JSONResponse({"error": "unknown event_type"}, status_code=400)
+        settings = request.app.state.settings
+        try:
+            tamper_mod.tamper_live(
+                event_type, event_id,
+                lifecycle_store=request.app.state.lifecycle_store,
+                record_store=request.app.state.store,
+                tracking_uri=settings.mlflow_tracking_uri,
+            )
+        except KeyError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        background_tasks.add_task(_scheduled_revert, request.app, event_type, event_id)
+        return {"tampered": True, "kind": "live", "event_id": event_id,
+                "ttl_seconds": tamper_mod.TAMPER_TTL_SECONDS}
+
+    @app.post("/tamper/reset/{event_type}/{event_id}")
+    def tamper_reset_route(request: Request, event_type: str, event_id: str):
+        if event_type not in ("decision", "training", "registration"):
+            return JSONResponse({"error": "unknown event_type"}, status_code=400)
+        settings = request.app.state.settings
+        reverted = tamper_mod.reset(
+            event_type, event_id,
+            lifecycle_store=request.app.state.lifecycle_store,
+            record_store=request.app.state.store,
+            tracking_uri=settings.mlflow_tracking_uri,
+        )
+        return {"reset": True, "reverted_count": reverted, "event_id": event_id}
+
+
+def _scheduled_revert(app, event_type, event_id):
+    """Wrapper for BackgroundTasks — runs reset after the TTL sleep."""
+    import time as _time
+    _time.sleep(tamper_mod.TAMPER_TTL_SECONDS)
+    settings = app.state.settings
+    try:
+        tamper_mod.reset(
+            event_type, event_id,
+            lifecycle_store=app.state.lifecycle_store,
+            record_store=app.state.store,
+            tracking_uri=settings.mlflow_tracking_uri,
+        )
+    except Exception as e:
+        logger.warning(f"Auto-revert raised: {e}")

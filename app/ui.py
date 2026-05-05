@@ -133,9 +133,11 @@ def _verify_envelope(app, envelope):
     result["signature_valid"] = sig.get("ok")
     result["permanent_copy_found"] = anchored.get("payload_bytes") is not None
     result["hash_match"] = anchored.get("ok")
-    # source_of_truth.ok is None for predictions (no re-derivable
-    # MLflow state) and True/False for training/registration. The
-    # UI treats None as "Not applicable" for predictions.
+    # source_of_truth.ok is True/False for predictions, training, and
+    # registration — the plugin re-derives canonical bytes from the
+    # live trace tag (predictions) or run state (training/registration)
+    # and compares to the anchored payload. None only appears when the
+    # refetch can't complete (legacy event, missing trace tag, etc.).
     result["source_of_truth_ok"] = sot.get("ok")
     result["source_of_truth_reason"] = sot.get("reason")
     result["overall"] = full_result.get("overall")
@@ -298,6 +300,8 @@ def decision_detail(request: Request, decision_id: str, verify: bool = False):
     # model. Phase 3 reintroduces tamper UX with four buttons paired to
     # the four real checks (signature / anchored bytes / live MLflow /
     # ar.io). Tracked as task #42.
+    canonical_bytes_json = None
+    signed_commitment_json = None
     if verify and envelope.get("arweave_tx_id"):
         result = _verify_envelope(app, envelope)
         result["verified_at"] = datetime.now(timezone.utc).isoformat()
@@ -306,6 +310,43 @@ def decision_detail(request: Request, decision_id: str, verify: bool = False):
         persistable = {k: v for k, v in result.items() if k != "plugin_full_verify"}
         envelope["last_verification"] = persistable
         app.state.store.update(decision_id, envelope)
+
+        # Phase 3: surface canonical bytes + signed envelope as
+        # pretty-printed JSON for the "How verification works" viewer.
+        # The plugin's full_verify already fetched both during
+        # _verify_envelope, so just re-format from its outputs.
+        try:
+            import json as _json
+            full = result.get("plugin_full_verify") or {}
+            anchored = full.get("anchored_bytes") or {}
+            payload_bytes = anchored.get("payload_bytes")
+            if payload_bytes:
+                # Bytes from MLflow are already JCS-canonicalized; pretty-
+                # print the parsed JSON so the viewer is human-readable.
+                try:
+                    canonical_bytes_json = _json.dumps(
+                        _json.loads(payload_bytes), indent=2
+                    )
+                except Exception:
+                    canonical_bytes_json = (
+                        payload_bytes.decode("utf-8")
+                        if isinstance(payload_bytes, (bytes, bytearray))
+                        else str(payload_bytes)
+                    )
+            # Re-fetch the on-chain envelope and pretty-print it. The
+            # plugin's verify path mutates a local copy with `_tx_id`;
+            # fetch fresh from the gateway for clean display.
+            tx_id = envelope.get("arweave_tx_id")
+            plugin_envelope = app.state.anchor.fetch_proof(tx_id) if tx_id else None
+            if plugin_envelope:
+                signed_commitment_json = _json.dumps(plugin_envelope, indent=2)
+        except Exception as e:  # noqa: BLE001
+            # Display-only: never block the page render on a viewer hiccup,
+            # but log so verification regressions are diagnosable.
+            logger.warning(
+                "decision_detail proof-viewer hydration failed for %s: %s",
+                envelope.get("record", {}).get("decision_id"), e,
+            )
 
     # Check Turbo status for anchored records (fast, single HTTP call)
     turbo_status = None
@@ -324,6 +365,8 @@ def decision_detail(request: Request, decision_id: str, verify: bool = False):
             # fully migrated in Phase 3.
             "local_verification": None,
             "turbo_status": turbo_status,
+            "canonical_bytes_json": canonical_bytes_json,
+            "signed_commitment_json": signed_commitment_json,
         },
     )
 
@@ -336,6 +379,8 @@ def run_detail(request: Request, run_id: str, verify: bool = False):
     if not envelope:
         return HTMLResponse("<h1>Training run not found</h1>", status_code=404)
 
+    canonical_bytes_json = None
+    signed_commitment_json = None
     if verify and envelope.get("arweave_tx_id"):
         result = _verify_envelope(app, envelope)
         result["verified_at"] = datetime.now(timezone.utc).isoformat()
@@ -346,6 +391,37 @@ def run_detail(request: Request, run_id: str, verify: bool = False):
         persistable = {k: v for k, v in result.items() if k != "plugin_full_verify"}
         envelope["last_verification"] = persistable
         app.state.lifecycle_store.update(envelope["record"]["event_id"], envelope)
+
+        # Phase 3: surface canonical bytes + signed envelope as
+        # pretty-printed JSON for the "How verification works" viewer
+        # (mirrors the decision_detail plumbing).
+        try:
+            import json as _json
+            full = result.get("plugin_full_verify") or {}
+            anchored = full.get("anchored_bytes") or {}
+            payload_bytes = anchored.get("payload_bytes")
+            if payload_bytes:
+                try:
+                    canonical_bytes_json = _json.dumps(
+                        _json.loads(payload_bytes), indent=2
+                    )
+                except Exception:
+                    canonical_bytes_json = (
+                        payload_bytes.decode("utf-8")
+                        if isinstance(payload_bytes, (bytes, bytearray))
+                        else str(payload_bytes)
+                    )
+            tx_id = envelope.get("arweave_tx_id")
+            plugin_envelope = app.state.anchor.fetch_proof(tx_id) if tx_id else None
+            if plugin_envelope:
+                signed_commitment_json = _json.dumps(plugin_envelope, indent=2)
+        except Exception as e:  # noqa: BLE001
+            # Display-only: never block the page render on a viewer hiccup,
+            # but log so verification regressions are diagnosable.
+            logger.warning(
+                "run_detail proof-viewer hydration failed for run %s: %s",
+                envelope.get("record", {}).get("run_id"), e,
+            )
 
     turbo_status = None
     if envelope.get("arweave_tx_id"):
@@ -387,6 +463,8 @@ def run_detail(request: Request, run_id: str, verify: bool = False):
             # absolute path (e.g. "/app/mlruns" on Railway) leaks
             # deployment detail and isn't useful to the reader.
             "mlflow_tracking_uri": app.state.settings.mlflow_tracking_uri,
+            "canonical_bytes_json": canonical_bytes_json,
+            "signed_commitment_json": signed_commitment_json,
         },
     )
 
@@ -410,6 +488,8 @@ def model_chain(request: Request, model_name: str, version: str, verify: bool = 
     # Full verification (on-demand)
     training_verify = None
     registration_verify = None
+    canonical_bytes_json = None
+    signed_commitment_json = None
     if verify:
         if training_env:
             training_verify = _verify_envelope(app, training_env)
@@ -419,6 +499,38 @@ def model_chain(request: Request, model_name: str, version: str, verify: bool = 
                 k: v for k, v in training_verify.items() if k != "plugin_full_verify"
             }
             app.state.lifecycle_store.update(training_env["record"]["event_id"], training_env)
+
+            # Phase 3: surface canonical bytes + signed envelope for the
+            # "How verification works" viewer. Use the training event's
+            # bytes since training is the chain's anchor / parent link.
+            try:
+                import json as _json
+                full = training_verify.get("plugin_full_verify") or {}
+                anchored = full.get("anchored_bytes") or {}
+                payload_bytes = anchored.get("payload_bytes")
+                if payload_bytes:
+                    try:
+                        canonical_bytes_json = _json.dumps(
+                            _json.loads(payload_bytes), indent=2
+                        )
+                    except Exception:
+                        canonical_bytes_json = (
+                            payload_bytes.decode("utf-8")
+                            if isinstance(payload_bytes, (bytes, bytearray))
+                            else str(payload_bytes)
+                        )
+                tx_id = training_env.get("arweave_tx_id")
+                plugin_envelope = app.state.anchor.fetch_proof(tx_id) if tx_id else None
+                if plugin_envelope:
+                    signed_commitment_json = _json.dumps(plugin_envelope, indent=2)
+            except Exception as e:  # noqa: BLE001
+                # Display-only: never block the page render on a viewer hiccup,
+                # but log so verification regressions are diagnosable.
+                logger.warning(
+                    "model_chain proof-viewer hydration failed for %s/v%s: %s",
+                    model_name, version, e,
+                )
+
         if registration_env:
             registration_verify = _verify_envelope(app, registration_env)
             registration_env["last_verification"] = {
@@ -461,5 +573,7 @@ def model_chain(request: Request, model_name: str, version: str, verify: bool = 
             "prediction_count": len(model_predictions),
             "anchored_count": anchored_count,
             "verified_count": verified_count,
+            "canonical_bytes_json": canonical_bytes_json,
+            "signed_commitment_json": signed_commitment_json,
         },
     )
