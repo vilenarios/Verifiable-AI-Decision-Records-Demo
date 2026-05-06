@@ -43,6 +43,31 @@ def _build_training_cache_record(model_info: dict) -> dict:
     """
     payload = model_info.get("training_payload") or {}
     artifact_checksums = payload.get("artifact_checksums", {}) or {}
+
+    # Merge each auto-anchored dataset's TX (and Arweave URL) into the
+    # corresponding dataset_inputs entry by name. Templates render the
+    # TX as a "View on ar.io" link without needing a separate lookup.
+    # The TX is navigation only — chain integrity comes from the
+    # inlined digest + schema_hash that are part of the signed
+    # canonical payload (see standalone-dataset-anchoring plan).
+    anchors_by_name: dict[str, dict] = {}
+    for da in (model_info.get("training_dataset_anchors") or []):
+        name = da.get("dataset_name")
+        if not name:
+            continue
+        ar = da.get("anchor_result") or {}
+        anchors_by_name[name] = {
+            "anchor_tx": ar.get("tx_id"),
+            "anchor_url": ar.get("url"),
+        }
+    enriched_dataset_inputs = []
+    for di in payload.get("dataset_inputs", []) or []:
+        name = di.get("name")
+        merged = dict(di)
+        if name and name in anchors_by_name:
+            merged.update(anchors_by_name[name])
+        enriched_dataset_inputs.append(merged)
+
     return {
         "event_id": str(uuid.uuid4()),
         "event_type": "training_complete",
@@ -56,7 +81,48 @@ def _build_training_cache_record(model_info: dict) -> dict:
         "artifact_hash": hash_data(canonical_json(artifact_checksums)),
         "source_name": payload.get("source_name", ""),
         "git_commit": payload.get("git_commit", ""),
+        # Surfaced from the canonical anchored payload (inlined
+        # metadata) plus per-dataset anchor_tx / anchor_url merged in
+        # from training_dataset_anchors. Empty list when proof was
+        # anchored under the legacy escape hatch.
+        "dataset_inputs": enriched_dataset_inputs,
     }
+
+
+def _build_dataset_anchored_records(model_info: dict) -> list[dict]:
+    """Build one lifecycle_store envelope per auto-anchored dataset.
+
+    Each entry mirrors the training/registration envelope shape so the
+    UI can render it as its own chain node with its own verification
+    badge: a ``record`` sub-dict with the dataset's identity, plus
+    ``arweave_tx_id`` / ``arweave_url`` / ``turbo_receipt`` from the
+    plugin's per-dataset anchor result. Returns one dict per dataset
+    with ``source_run_id`` set so the model_chain page can filter
+    these entries to the relevant training run.
+    """
+    out = []
+    for da in (model_info.get("training_dataset_anchors") or []):
+        ds_payload = da.get("payload") or {}
+        anchor_result = da.get("anchor_result") or {}
+        record = {
+            "event_id": str(uuid.uuid4()),
+            "event_type": "dataset_anchored",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "name":        ds_payload.get("name"),
+            "source":      ds_payload.get("source"),
+            "source_type": ds_payload.get("source_type"),
+            "digest":      ds_payload.get("digest"),
+            "schema_hash": ds_payload.get("schema_hash"),
+            "source_run_id": model_info["run_id"],
+            "payload_hash": da.get("payload_hash"),
+        }
+        out.append({
+            "record": record,
+            "arweave_tx_id": anchor_result.get("tx_id"),
+            "arweave_url": anchor_result.get("url"),
+            "turbo_receipt": anchor_result.get("receipt"),
+        })
+    return out
 
 
 def _build_registration_cache_record(
@@ -121,6 +187,16 @@ def _startup_anchor_lifecycle(settings, model_info, lifecycle_store):
         logger.info(
             f"Tracked training {run_id} in lifecycle_store: "
             f"tx={training_anchor.get('tx_id')}"
+        )
+
+        # Per-dataset standalone anchors as their own lifecycle entries.
+        # Each gets a chain-card on the model lineage page with its own
+        # verification badge — same shape as training/registration.
+        for ds_envelope in _build_dataset_anchored_records(model_info):
+            lifecycle_store.append(ds_envelope)
+        logger.info(
+            f"Tracked {len(model_info.get('training_dataset_anchors') or [])} "
+            f"dataset_anchored entries for run {run_id}."
         )
 
     # Registration cache entry — plugin's ArioMlflowClient kicked off the
@@ -448,6 +524,12 @@ def api_train(request: Request, body: dict, background_tasks: BackgroundTasks):
     }
     request.app.state.lifecycle_store.append(training_envelope)
 
+    # Per-dataset standalone-anchor lifecycle entries — one chain-card
+    # per logged dataset on the model lineage page, each with its own
+    # Arweave TX and verification status.
+    for ds_envelope in _build_dataset_anchored_records(info):
+        request.app.state.lifecycle_store.append(ds_envelope)
+
     # Registration cache entry. The plugin's ArioMlflowClient kicked off
     # the real registration anchor in a daemon thread; arweave_tx_id
     # starts None and the bridge task hydrates it when the daemon
@@ -737,7 +819,7 @@ if get_settings().demo_mode:
     @app.post("/tamper/saved/{event_type}/{event_id}")
     def tamper_saved_route(request: Request, event_type: str, event_id: str,
                            background_tasks: BackgroundTasks):
-        if event_type not in ("decision", "training", "registration"):
+        if event_type not in ("decision", "training", "registration", "dataset"):
             return JSONResponse({"error": "unknown event_type"}, status_code=400)
         settings = request.app.state.settings
         try:
@@ -756,7 +838,7 @@ if get_settings().demo_mode:
     @app.post("/tamper/live/{event_type}/{event_id}")
     def tamper_live_route(request: Request, event_type: str, event_id: str,
                           background_tasks: BackgroundTasks):
-        if event_type not in ("decision", "training", "registration"):
+        if event_type not in ("decision", "training", "registration", "dataset"):
             return JSONResponse({"error": "unknown event_type"}, status_code=400)
         settings = request.app.state.settings
         try:
@@ -774,7 +856,7 @@ if get_settings().demo_mode:
 
     @app.post("/tamper/reset/{event_type}/{event_id}")
     def tamper_reset_route(request: Request, event_type: str, event_id: str):
-        if event_type not in ("decision", "training", "registration"):
+        if event_type not in ("decision", "training", "registration", "dataset"):
             return JSONResponse({"error": "unknown event_type"}, status_code=400)
         settings = request.app.state.settings
         reverted = tamper_mod.reset(

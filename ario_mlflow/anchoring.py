@@ -213,6 +213,62 @@ def _find_registered_model_for_run(client, run_id: str) -> str | None:
     return results[0].name
 
 
+def _serialize_dataset_inputs(run_data) -> list[dict]:
+    """Read ``run_data.inputs.dataset_inputs`` and produce a
+    deterministic list suitable for inclusion in canonical bytes.
+
+    Schema is fingerprinted (``schema_hash``) rather than included
+    verbatim — column names can be sensitive in regulated domains
+    (medical, financial). The hash is computed over the JCS-canonicalized
+    parsed schema so the same logical schema produces the same hash
+    regardless of MLflow's whitespace or key-ordering choices.
+
+    Identifier fields (``name``, ``source``, ``source_type``, ``digest``,
+    ``context``) are plaintext — they're the auditor-readable
+    identification of the dataset and don't carry the same privacy risk
+    as the column-level schema.
+
+    Returns an empty list when the run has no logged inputs. Sorted by
+    ``(name, source, context, digest)`` for determinism even when
+    multiple inputs share a name.
+    """
+    inputs = getattr(getattr(run_data, "inputs", None), "dataset_inputs", None) or []
+    out = []
+    for di in inputs:
+        ds = di.dataset
+        context = next(
+            (t.value for t in (di.tags or []) if t.key == "mlflow.data.context"),
+            None,
+        )
+        schema_str = getattr(ds, "schema", None) or ""
+        if schema_str:
+            try:
+                schema_canonical = canonical_json(json.loads(schema_str))
+            except (ValueError, TypeError):
+                # Schema isn't valid JSON — fall back to hashing the
+                # raw bytes so a malformed schema can't break anchor().
+                # Surface in tests if this ever fires.
+                schema_canonical = schema_str.encode("utf-8")
+            schema_hash = hash_data(schema_canonical)
+        else:
+            schema_hash = ""
+        out.append({
+            "name":        ds.name,
+            "source":      ds.source,
+            "source_type": ds.source_type,
+            "digest":      ds.digest,
+            "schema_hash": schema_hash,
+            "context":     context,
+        })
+    out.sort(key=lambda d: (
+        d.get("name") or "",
+        d.get("source") or "",
+        d.get("context") or "",
+        d.get("digest") or "",
+    ))
+    return out
+
+
 def _build_training_payload(
     *,
     run_id: str,
@@ -225,6 +281,7 @@ def _build_training_payload(
     metadata: dict | None,
     include_tracking_uri: bool,
     tracking_uri: str | None,
+    dataset_inputs: list[dict],
 ) -> dict:
     """Assemble the canonical-payload dict for a training proof.
 
@@ -241,6 +298,7 @@ def _build_training_payload(
         "artifact_checksums": artifact_checksums_map,
         "source_name": source_name,
         "git_commit": git_commit,
+        "dataset_inputs": dataset_inputs,
     }
     if mlflow_trace_id:
         payload["mlflow_trace_id"] = mlflow_trace_id
@@ -261,12 +319,108 @@ def _build_training_payload(
     return payload
 
 
+def _anchor_dataset_event(
+    dataset,
+    *,
+    proof_engine: ProofEngine,
+    arweave: ArweaveAnchor,
+) -> dict:
+    """Anchor a standalone dataset event.
+
+    Internal helper for ``anchor(dataset=...)``. Builds the canonical
+    payload from the dataset's identity fields, signs the envelope,
+    and uploads to Arweave (best-effort, same "signed-only on upload
+    failure" semantics as the training-mode path).
+
+    The dataset event commits to:
+
+    - ``name``, ``source``, ``source_type``, ``digest`` — auditor-readable
+      identifiers (plaintext).
+    - ``schema_hash`` — SHA-256 of the JCS-canonicalized schema JSON.
+      Column names are NOT in the proof for privacy; the hash is
+      sufficient for tamper-detection.
+
+    Notably absent: the per-run ``context`` tag (training / validation /
+    test). Context is a relationship between a dataset and a specific
+    *use* of it (set by ``mlflow.log_input(ds, context=...)``); it
+    belongs on the per-run dataset_input reference, not on the dataset
+    itself. The training event's payload still carries context per
+    referenced input.
+
+    Returns the same dict shape ``anchor()``'s training mode returns
+    (envelope, payload, payload_bytes, payload_hash, anchor_result).
+    Caller can read ``envelope["payload_hash"]`` or
+    ``anchor_result["tx_id"]`` to chain or reference.
+    """
+    schema_str = getattr(dataset, "schema", None) or ""
+    if schema_str:
+        try:
+            schema_canonical = canonical_json(json.loads(schema_str))
+        except (ValueError, TypeError):
+            schema_canonical = schema_str.encode("utf-8")
+        schema_hash = hash_data(schema_canonical)
+    else:
+        schema_hash = ""
+
+    payload: dict = {
+        "event_type": "dataset",
+        "name": dataset.name,
+        "source": dataset.source,
+        "source_type": dataset.source_type,
+        "digest": dataset.digest,
+        "schema_hash": schema_hash,
+    }
+    payload_bytes = canonical_json(payload)
+    payload_hash = hash_data(payload_bytes)
+
+    envelope = proof_engine.create_commitment(
+        event_type="dataset",
+        subject={
+            "type": "mlflow_dataset",
+            "name": dataset.name,
+            "digest": dataset.digest,
+        },
+        payload_bytes=payload_bytes,
+        # Dataset events don't have a chain-head concept yet — every
+        # dataset is its own GENESIS. Dataset versioning chain
+        # (`previous_hash` linking older versions of the same dataset)
+        # is a deferred follow-up; see ROADMAP.
+        previous_hash="GENESIS",
+    )
+
+    # Upload best-effort. Same signed-only-on-failure pattern as
+    # training-mode anchor() so a transient gateway error doesn't
+    # abort the caller's workflow.
+    anchor_result = None
+    if arweave is not None and getattr(arweave, "enabled", False):
+        try:
+            anchor_result = arweave.upload_proof(envelope)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"Dataset upload raised for {dataset.name!r}; "
+                f"keeping signed-only proof: {e}"
+            )
+            anchor_result = None
+
+    return {
+        "envelope": envelope,
+        "payload": payload,
+        "payload_bytes": payload_bytes,
+        "payload_hash": payload_hash,
+        "previous_hash": "GENESIS",
+        "anchor_result": anchor_result,
+    }
+
+
 def anchor(
     proof_engine: ProofEngine | None = None,
     arweave: ArweaveAnchor | None = None,
     artifact_path: str | None = None,
     metadata: dict | None = None,
     capture_otel: bool = True,
+    allow_empty_dataset_inputs: bool = False,
+    *,
+    dataset=None,
 ) -> dict:
     """Create a verifiable commitment for the current training run.
 
@@ -320,14 +474,6 @@ def anchor(
         - ``artifact_error`` — error message when
           ``artifact_status == "hash_failed"``, else ``None``
     """
-    active = mlflow.active_run()
-    if active is None:
-        raise RuntimeError("anchor() must be called inside an active MLflow run")
-
-    run_id = active.info.run_id
-    client = mlflow.tracking.MlflowClient()
-    run_data = client.get_run(run_id)
-
     if proof_engine is None:
         proof_engine = ProofEngine()
     if arweave is None:
@@ -335,6 +481,23 @@ def anchor(
             os.environ.get("ARIO_MLFLOW_ARWEAVE_WALLET", ""),
             os.environ.get("ARIO_MLFLOW_GATEWAY_HOST", "turbo-gateway.com"),
         )
+
+    # Dataset mode: dispatch to the standalone-dataset helper. No
+    # active MLflow run required; caller is anchoring a Dataset object
+    # standalone (publisher pattern, pre-train anchoring, etc.).
+    if dataset is not None:
+        return _anchor_dataset_event(
+            dataset, proof_engine=proof_engine, arweave=arweave,
+        )
+
+    # Training mode (default): must be inside an active run.
+    active = mlflow.active_run()
+    if active is None:
+        raise RuntimeError("anchor() must be called inside an active MLflow run")
+
+    run_id = active.info.run_id
+    client = mlflow.tracking.MlflowClient()
+    run_data = client.get_run(run_id)
 
     # Auto-resolve the artifact path from the run's logged-model history when
     # the caller did not specify one. This replaces the old hardcoded default
@@ -396,6 +559,66 @@ def anchor(
         k: v for k, v in (metadata or {}).items() if k != "include_tracking_uri"
     }}
 
+    # Read MLflow's dataset_inputs (set by mlflow.log_input). Strict-
+    # by-default — anchor() refuses to mint a training proof with no
+    # dataset reference, since that breaks the verifiable chain at the
+    # head. allow_empty_dataset_inputs=True is the documented escape
+    # hatch for the rare legitimate case (research, GPAI workflows with
+    # no single dataset).
+    dataset_inputs = _serialize_dataset_inputs(run_data)
+    if not dataset_inputs and not allow_empty_dataset_inputs:
+        raise ValueError(
+            "anchor(): training run has no logged dataset inputs. "
+            "Call mlflow.log_input(dataset, context=...) before training, "
+            "or pass allow_empty_dataset_inputs=True to override (only "
+            "do this for workflows that genuinely have no single dataset; "
+            "see README on input-side anchoring)."
+        )
+
+    # Auto-anchor each dataset_input as a standalone dataset event
+    # (one signed envelope per dataset, its own Arweave TX). The TX
+    # is written to a run-level tag for navigation —
+    # ario.dataset_anchor_tx.<dataset_name> — so the demo and any
+    # chain-walking auditor can find the dataset proof from the run.
+    # The TX is NOT part of the training event's canonical bytes;
+    # chain integrity is provided by the inlined digest +
+    # schema_hash that _serialize_dataset_inputs already includes.
+    raw_inputs = list(getattr(run_data.inputs, "dataset_inputs", None) or [])
+    dataset_anchors: list[dict] = []
+    for di in raw_inputs:
+        ds = di.dataset
+        try:
+            ds_result = _anchor_dataset_event(
+                ds, proof_engine=proof_engine, arweave=arweave,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Don't abort training-mode anchor() on dataset-anchor failure.
+            # Log and continue; the training proof still ships with
+            # inlined dataset metadata (cryptographic chain integrity
+            # is preserved). Best-effort matches the rest of the
+            # plugin's "signed-only on transient failure" pattern.
+            logger.warning(
+                f"Auto-anchor of dataset {ds.name!r} raised; continuing "
+                f"with training proof. Inlined metadata still ensures "
+                f"chain integrity: {e}"
+            )
+            continue
+        # Annotate the result with the dataset's name so callers can
+        # match dataset_anchors entries back to dataset_inputs by name.
+        ds_result["dataset_name"] = ds.name
+        dataset_anchors.append(ds_result)
+        ds_tx = (ds_result.get("anchor_result") or {}).get("tx_id")
+        if ds_tx:
+            try:
+                client.set_tag(
+                    run_id, f"ario.dataset_anchor_tx.{ds.name}", ds_tx,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"Could not set ario.dataset_anchor_tx.{ds.name} "
+                    f"on run {run_id}: {e}"
+                )
+
     # Build canonical payload (what's hashed and committed to).
     payload = _build_training_payload(
         run_id=run_id,
@@ -408,6 +631,7 @@ def anchor(
         metadata=merged_metadata,
         include_tracking_uri=include_tracking_uri,
         tracking_uri=tracking_uri,
+        dataset_inputs=dataset_inputs,
     )
     payload_bytes = canonical_json(payload)
     payload_hash = hash_data(payload_bytes)
@@ -556,4 +780,10 @@ def anchor(
         "artifact_path": resolved_path,
         "artifact_status": artifact_status,
         "artifact_error": artifact_error,
+        # One entry per auto-anchored dataset_input, in the order the
+        # caller logged them. Each entry is the dict returned by
+        # _anchor_dataset_event, plus a ``dataset_name`` key so callers
+        # can match against dataset_inputs (the inlined-in-training
+        # version) by name.
+        "dataset_anchors": dataset_anchors,
     }

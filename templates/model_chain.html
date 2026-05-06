@@ -122,6 +122,147 @@
         </div>
 
         <div class="chain">
+            <!-- Dataset Nodes — head of the chain. Each logged dataset is
+                 anchored as its own signed event with its own Arweave TX;
+                 each node here is independently verifiable (signature +
+                 ar.io attestation in v1, full SoT deferred to v2). -->
+            {% set training_dataset_inputs = (training.record.get('dataset_inputs') if training else []) or [] %}
+            {% if dataset_anchored %}
+                {% for ds_env in dataset_anchored %}
+                {% set dv = ds_env.get('last_verification') %}
+                {% set d_pending_attestation = dv and dv.overall is sameas false
+                    and dv.signature_valid is sameas true
+                    and dv.attestation_level and dv.attestation_level < 2 %}
+                {% set d_real_fail = dv and dv.overall is sameas false and not d_pending_attestation %}
+                <div class="chain-node">
+                    <div class="chain-dot {% if dv and dv.overall is sameas true %}chain-dot-green{% elif d_real_fail %}chain-dot-red{% elif ds_env.arweave_tx_id %}chain-dot-yellow{% else %}chain-dot-gray{% endif %}"></div>
+                    <div class="chain-card">
+                        <div class="chain-card-header">
+                            <h3>Training Dataset</h3>
+                            {% if dv and dv.overall is sameas true %}
+                                <span class="badge badge-green"><span class="badge-dot"></span> Verified</span>
+                            {% elif d_pending_attestation %}
+                                <span class="badge badge-yellow" title="Cryptographic checks passed. ar.io's attestation is still propagating from Level 1 → 2-3 (typically 2-5 minutes after upload). Re-verify in a few minutes.">Pending ar.io confirmation</span>
+                            {% elif dv and dv.overall is sameas false %}
+                                <span class="badge badge-red"><span class="badge-dot"></span> Failed</span>
+                            {% elif ds_env.arweave_tx_id %}
+                                <span class="badge badge-yellow"><span class="badge-dot"></span> Pending verification</span>
+                            {% elif arweave_enabled %}
+                                <span class="badge badge-yellow"><span class="badge-dot badge-dot-pulse"></span> Anchoring</span>
+                            {% else %}
+                                <span class="badge badge-gray"><span class="badge-dot"></span> Not anchored</span>
+                            {% endif %}
+                        </div>
+                        <div class="chain-card-body">
+                            <div>
+                                <div class="kv">
+                                    <div class="kv-row">
+                                        <span class="kv-key">Name</span>
+                                        <span class="kv-value">{{ ds_env.record.name }}</span>
+                                    </div>
+                                    <div class="kv-row">
+                                        <span class="kv-key">Source</span>
+                                        <span class="kv-value mono mono-sm">{{ ds_env.record.source }}</span>
+                                    </div>
+                                    <div class="kv-row">
+                                        <span class="kv-key">Digest</span>
+                                        <span class="kv-value mono mono-sm">{{ ds_env.record.digest }}</span>
+                                    </div>
+                                    {% if ds_env.record.schema_hash %}
+                                    <div class="kv-row">
+                                        <span class="kv-key">Schema fingerprint</span>
+                                        <span class="kv-value mono mono-sm">{{ ds_env.record.schema_hash }}</span>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <div class="mini-verify">
+                                <div class="mini-verify-row">
+                                    <span>Proof Found</span>
+                                    {% if dv %}
+                                        {% if dv.proof_found is sameas true %}<span class="check">PASS</span>
+                                        {% elif dv.proof_found is sameas false %}<span class="cross">FAIL</span>
+                                        {% else %}<span class="badge badge-yellow">Pending</span>{% endif %}
+                                    {% else %}<span class="unchecked">Not checked</span>{% endif %}
+                                </div>
+                                <div class="mini-verify-row">
+                                    <span>Signature Confirmed</span>
+                                    {% if dv %}
+                                        {% if dv.signature_valid is sameas true %}<span class="check">PASS</span>
+                                        {% elif dv.signature_valid is sameas false %}<span class="cross">FAIL</span>
+                                        {% else %}<span class="badge badge-yellow">Pending</span>{% endif %}
+                                    {% else %}<span class="unchecked">Not checked</span>{% endif %}
+                                </div>
+                                <div class="mini-verify-row" title="Live re-derivation of the dataset's metadata against MLflow's dataset registry is deferred to v2. Today the dataset's signature + ar.io attestation establish 'this dataset was signed at time T'; post-anchor mutation of dataset metadata is caught one link down via Training Record Matches (training's signed payload inlines the dataset's identity).">
+                                    <span>Dataset Record Matches</span>
+                                    <span class="unchecked">Deferred (v2)</span>
+                                </div>
+                                <div class="mini-verify-meta">
+                                    {% if dv and dv.attested_by %}<span>Attested by <strong>{{ dv.attested_by }}</strong></span>{% endif %}
+                                    <span style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.2rem;">
+                                        <strong>Overall</strong>
+                                        {% if dv %}
+                                            {% if dv.overall is sameas true %}<strong class="check">PASS</strong>
+                                            {% elif d_pending_attestation %}<span class="badge badge-yellow" title="Cryptographic checks passed. ar.io attestation still propagating.">Pending ar.io</span>
+                                            {% elif dv.overall is sameas false %}<strong class="cross">FAIL</strong>
+                                            {% else %}<span class="badge badge-yellow">Pending</span>{% endif %}
+                                        {% else %}<span class="unchecked">Not verified</span>{% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                        {% if ds_env.arweave_tx_id %}
+                        <div class="chain-card-footer">
+                            <a href="{{ ds_env.arweave_url }}" target="_blank" rel="noopener" class="mono mono-sm">TX: {{ ds_env.arweave_tx_id[:16] }}...</a>
+                        </div>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            {% elif training_dataset_inputs %}
+                {# Legacy fallback: dataset references inlined in training but no
+                   standalone dataset_anchored lifecycle entries. Renders a
+                   single information-only card so the chain still has a head
+                   node visible for proofs anchored before standalone dataset
+                   anchoring shipped. #}
+                <div class="chain-node">
+                    <div class="chain-dot chain-dot-gray"></div>
+                    <div class="chain-card">
+                        <div class="chain-card-header">
+                            <h3>Training Dataset</h3>
+                            <span class="badge badge-gray" title="This proof predates standalone dataset anchoring. The dataset's identity is inlined in the training run's signed payload, but no standalone dataset proof was produced.">Anchored inside training</span>
+                        </div>
+                        <div class="chain-card-body" style="grid-template-columns: 1fr;">
+                            <div>
+                                {% for di in training_dataset_inputs %}
+                                <div class="kv">
+                                    <div class="kv-row">
+                                        <span class="kv-key">Name</span>
+                                        <span class="kv-value">{{ di.name }}{% if di.context %} <span style="color: var(--muted);">({{ di.context }})</span>{% endif %}</span>
+                                    </div>
+                                    <div class="kv-row">
+                                        <span class="kv-key">Source</span>
+                                        <span class="kv-value mono mono-sm">{{ di.source }}</span>
+                                    </div>
+                                    <div class="kv-row">
+                                        <span class="kv-key">Digest</span>
+                                        <span class="kv-value mono mono-sm">{{ di.digest }}</span>
+                                    </div>
+                                    {% if di.schema_hash %}
+                                    <div class="kv-row">
+                                        <span class="kv-key">Schema fingerprint</span>
+                                        <span class="kv-value mono mono-sm">{{ di.schema_hash }}</span>
+                                    </div>
+                                    {% endif %}
+                                </div>
+                                {% if not loop.last %}<div style="height: 0.85rem; border-top: 1px solid var(--border); margin-top: 0.85rem;"></div>{% endif %}
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+
             <!-- Training Node -->
             <div class="chain-node">
                 {% if training %}
@@ -461,18 +602,28 @@
             <div class="tamper-header-inner">
               <span class="tamper-summary-icon"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3 1 L7 5 L3 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
               <span class="tamper-summary-title">Click to tamper</span>
-              <span class="tamper-summary-hint">simulate two attacks on the chain</span>
+              <span class="tamper-summary-hint">simulate three attacks on the chain</span>
             </div>
           </summary>
           <div class="tamper-body">
             <div class="tamper-intro">
-              Two ways someone with admin access to MLflow could try to silently rewrite this model's history — one attack at the training step, one at the registration step. Each gets caught at the corresponding link in the chain. Tampers auto-reverse after a short window, or click <em>Reset all</em>.
+              Three ways someone with admin access to MLflow could try to silently rewrite this model's history — one attack at each link in the chain. Each gets caught at the corresponding link. Tampers auto-reverse after a short window, or click the matching Reset button.
             </div>
+
+            {% if training and training_dataset_inputs %}
+            <div class="tamper-row">
+              <div class="tamper-row-info">
+                <div class="tamper-row-title"><span class="num">1</span>Tamper with the dataset metadata</div>
+                <div class="tamper-row-desc">Mutate the recorded dataset's digest in MLflow — for example, claim a different digest for the same training data so the on-record fingerprint no longer matches what was actually used. <em style="font-family: 'JetBrains Mono', monospace; color: var(--muted); font-style: normal;">Overwrites the <code>digest</code> in the dataset's <code>meta.yaml</code>.</em> <strong>Breaks → Training Record Matches</strong> on the Training Run node (training's signed payload inlines the dataset's identity, so the chain catches the change at the training link).</div>
+              </div>
+              <button class="btn-tamper" data-tamper-kind="live" data-event-type="dataset" data-event-id="{{ training.record.run_id }}">Tamper</button>
+            </div>
+            {% endif %}
 
             {% if training %}
             <div class="tamper-row">
               <div class="tamper-row-info">
-                <div class="tamper-row-title"><span class="num">1</span>Tamper the training run's live data</div>
+                <div class="tamper-row-title"><span class="num">2</span>Tamper the training run's live data</div>
                 <div class="tamper-row-desc">Mutate the training run's metrics in MLflow — for example, change the recorded accuracy from its real value to 99.9% to make the model look better than it was. <em style="font-family: 'JetBrains Mono', monospace; color: var(--muted); font-style: normal;">Overwrites the <code>accuracy</code> metric on the run.</em> <strong>Breaks → Training Record Matches</strong> on the Training Run node above.</div>
               </div>
               <button class="btn-tamper" data-tamper-kind="live" data-event-type="training" data-event-id="{{ training.record.run_id }}">Tamper</button>
@@ -482,7 +633,7 @@
             {% if registration %}
             <div class="tamper-row">
               <div class="tamper-row-info">
-                <div class="tamper-row-title"><span class="num">2</span>Swap the deployed model artifact</div>
+                <div class="tamper-row-title"><span class="num">3</span>Swap the deployed model artifact</div>
                 <div class="tamper-row-desc">Replace the <code>model.pkl</code> file in MLflow with different bytes — the model-swap attack governance teams worry about. Anyone could claim the swapped model is still v{{ version }}, but its artifact hash no longer matches what was anchored at registration time. <em style="font-family: 'JetBrains Mono', monospace; color: var(--muted); font-style: normal;">Overwrites <code>model/model.pkl</code> on the source run.</em> <strong>Breaks → Registration Record Matches</strong> on the Model Registration node above (and Training Record Matches too — the chain catches the swap at every link that references the artifact).</div>
                 <span class="tamper-headline">★ Headline tamper for governance audiences</span>
               </div>
@@ -494,6 +645,7 @@
               <div style="font-size: 0.74rem; color: var(--muted); line-height: 1.45; font-style: italic;">Each tamper changes the live MLflow data at a different link in the chain. The verifier re-derives canonical bytes from the current state and compares to what was anchored — any divergence breaks the matching record's check, and the chain breaks at exactly the link that was attacked.</div>
               <div style="display: flex; align-items: center; gap: 0.4rem; padding-top: 0.45rem; border-top: 1px solid var(--border); flex-wrap: wrap;">
                 <span class="tamper-footer-text">Tampers auto-reverse after a short window. Reset clears each.</span>
+                {% if training and training_dataset_inputs %}<button class="btn-reset" data-event-type="dataset" data-event-id="{{ training.record.run_id }}">Reset dataset</button>{% endif %}
                 {% if training %}<button class="btn-reset" data-event-type="training" data-event-id="{{ training.record.run_id }}">Reset training</button>{% endif %}
                 {% if registration %}<button class="btn-reset" data-event-type="registration" data-event-id="{{ registration.record.event_id }}">Reset registration</button>{% endif %}
               </div>

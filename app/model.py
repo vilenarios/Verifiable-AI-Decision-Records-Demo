@@ -11,8 +11,10 @@ import logging
 import os
 
 import mlflow
+import mlflow.data
 import mlflow.sklearn
 import numpy as np
+import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
@@ -142,6 +144,23 @@ def train_and_register_with_params(
     pipeline.fit(X_train, y_train)
     accuracy = pipeline.score(X_test, y_test)
 
+    # Wrap the training data as a labelled MLflow Dataset so the run
+    # carries a structured dataset reference. The plugin's anchor() reads
+    # run.inputs.dataset_inputs and folds the dataset's digest, source,
+    # name, and JCS-canonicalized schema fingerprint into the signed
+    # canonical payload — closing the input-side honesty gap.
+    train_df = pd.DataFrame(X_train, columns=FEATURE_NAMES)
+    train_df["approved"] = y_train
+    training_dataset = mlflow.data.from_pandas(
+        train_df,
+        # Plain identifier (no scheme) so MLflow's source registry
+        # resolves it as a LocalArtifactDatasetSource. The data is
+        # synthetic and generated in-process; the source string is
+        # informational, not a real fetch URI.
+        source="credit_scorer_demo_synthetic.csv",
+        name="credit_scorer_demo_training_data",
+    )
+
     with mlflow.start_run() as run:
         mlflow.log_param("model_type", "LogisticRegression+StandardScaler")
         mlflow.log_param("max_iter", max_iter)
@@ -149,6 +168,7 @@ def train_and_register_with_params(
         mlflow.log_param("n_training_samples", len(X_train))
         mlflow.log_param("feature_names", ",".join(FEATURE_NAMES))
         mlflow.log_metric("accuracy", accuracy)
+        mlflow.log_input(training_dataset, context="training")
 
         # Log the model WITHOUT auto-registration. We register
         # explicitly via ArioMlflowClient below so the registration
@@ -225,6 +245,12 @@ def train_and_register_with_params(
         "training_payload": training_anchor["payload"],
         "training_payload_hash": training_anchor["payload_hash"],
         "training_anchor_result": training_anchor.get("anchor_result"),
+        # Per-dataset standalone-anchor results from training-mode
+        # auto-anchor. Each entry has dataset_name + the dict returned
+        # by the plugin's _anchor_dataset_event (envelope, payload,
+        # anchor_result with tx_id, etc.). The demo uses these to show
+        # each dataset's own Arweave TX in the lineage / run-detail UI.
+        "training_dataset_anchors": training_anchor.get("dataset_anchors") or [],
         "ario_client": ario_client,
     }
 
