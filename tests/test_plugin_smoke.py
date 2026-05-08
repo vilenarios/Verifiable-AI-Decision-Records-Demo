@@ -379,29 +379,32 @@ def test_arweave_anchor_with_missing_wallet_generates_in_memory(monkeypatch):
     assert isinstance(anchor.enabled, bool)
 
 
-def test_arweave_anchor_with_unreadable_wallet_falls_back(tmp_path, monkeypatch, caplog):
+def test_arweave_anchor_with_unreadable_wallet_raises(tmp_path, monkeypatch):
+    """Caller-supplied wallet path that is unreadable JSON must raise
+    ``WalletLoadError`` instead of silently signing with an
+    auto-generated wallet under a different identity."""
+    from ario_mlflow.arweave import WalletLoadError
+
     bad = tmp_path / "bad.json"
     bad.write_text("{not valid json")
     monkeypatch.delenv("ARIO_MLFLOW_ARWEAVE_WALLET", raising=False)
-    with caplog.at_level("WARNING"):
-        anchor = ArweaveAnchor(wallet_path=str(bad))
-    # Must not raise. Warning must name the invalid wallet, and we must fall
-    # through to the auto-generated wallet path.
-    assert isinstance(anchor.enabled, bool)
-    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
-    assert any("Invalid Arweave wallet" in m for m in warnings), warnings
+
+    with pytest.raises(WalletLoadError, match="not valid JSON"):
+        ArweaveAnchor(wallet_path=str(bad))
 
 
-def test_arweave_anchor_with_structurally_invalid_jwk_falls_back(tmp_path, monkeypatch, caplog):
-    """Valid JSON but missing RSA fields should fall back, not crash ArweaveSigner."""
+def test_arweave_anchor_with_structurally_invalid_jwk_raises(tmp_path, monkeypatch):
+    """Valid JSON but missing RSA JWK fields must raise — the operator's
+    intent (use this wallet) cannot be silently overridden by an
+    auto-generated substitute."""
+    from ario_mlflow.arweave import WalletLoadError
+
     bad = tmp_path / "incomplete.json"
     bad.write_text('{"kty": "RSA"}')  # valid JSON, missing n/e/d/...
     monkeypatch.delenv("ARIO_MLFLOW_ARWEAVE_WALLET", raising=False)
-    with caplog.at_level("WARNING"):
-        anchor = ArweaveAnchor(wallet_path=str(bad))
-    assert isinstance(anchor.enabled, bool)
-    warnings = [r.message for r in caplog.records if r.levelname == "WARNING"]
-    assert any("Invalid Arweave wallet" in m and "RSA JWK" in m for m in warnings), warnings
+
+    with pytest.raises(WalletLoadError, match="not a complete RSA JWK"):
+        ArweaveAnchor(wallet_path=str(bad))
 
 
 # --- ArioVerifyClient normalize key rename (S1 / #5) ----------------------

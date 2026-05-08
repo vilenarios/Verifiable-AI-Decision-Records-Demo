@@ -30,8 +30,9 @@ def generate_verification_html(
             ``"ario-mlflow verify model fraud-detector/3"``). If omitted, falls
             back to the training-run form using ``run_id`` from the proof.
         verify_base_url: Base URL for the ar.io Verify dashboard (tx_id is
-            appended). Falls back to ``ARIO_MLFLOW_ARIO_VERIFY_URL`` or the
-            public vilenarios.com endpoint.
+            appended). Falls back to ``ARIO_MLFLOW_ARIO_VERIFY_URL``. If
+            neither is set, the CLI command is shown without an external
+            verify-link (the CLI is always actionable).
         wallet_mode: One of ``"user-configured"``, ``"persistent"``, or
             ``"ephemeral"`` — rendered as a small transparency note so
             readers can tell whether the proof was signed with a
@@ -128,23 +129,27 @@ def generate_verification_html(
             url = html.escape(str(verification["report_url"]))
             verify_row += _row("Report", f'<a href="{url}" target="_blank" rel="noopener">View on ar.io Verify</a>')
 
-    # ar.io Verify link (always show if we have a TX)
+    # ar.io Verify link (CLI command always shown; external link only if
+    # a verify URL is configured — no silent fallback to a developer
+    # endpoint).
     verify_link = ""
     if tx_id and not verification:
-        base = (
-            verify_base_url
-            or os.environ.get("ARIO_MLFLOW_ARIO_VERIFY_URL")
-            or "https://vilenarios.com/local/verify"
-        ).rstrip("/")
-        verify_url = f"{base}/{html.escape(tx_id)}"
+        base_raw = verify_base_url or os.environ.get("ARIO_MLFLOW_ARIO_VERIFY_URL")
         cmd = cli_verify_cmd or (f"ario-mlflow verify run {run_id}" if run_id else "ario-mlflow verify run <run_id>")
+        if base_raw:
+            verify_url = f"{base_raw.rstrip('/')}/{html.escape(tx_id)}"
+            link_html = (
+                f', or <a href="{verify_url}" target="_blank" rel="noopener">'
+                f'check manually on ar.io Verify</a>'
+            )
+        else:
+            link_html = ""
         verify_link = f"""
   <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:14px;margin-bottom:16px;">
     <div style="font-size:13px;font-weight:600;margin-bottom:6px;">ar.io Verification</div>
     <div style="font-size:13px;color:#6b7280;">
       Run <code style="font-family:'SF Mono',monospace;font-size:12px;">{html.escape(cmd)}</code> to verify this proof
-      and update this report, or
-      <a href="{verify_url}" target="_blank" rel="noopener">check manually on ar.io Verify</a>.
+      and update this report{link_html}.
     </div>
   </div>"""
 

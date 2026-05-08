@@ -26,6 +26,18 @@ WALLET_MODE_EPHEMERAL = "ephemeral"
 _REQUIRED_JWK_FIELDS = {"kty", "n", "e", "d", "p", "q", "dp", "dq", "qi"}
 
 
+class WalletLoadError(Exception):
+    """A caller-supplied Arweave wallet path could not be loaded.
+
+    Raised when ``ARIO_MLFLOW_ARWEAVE_WALLET`` (or the constructor's
+    ``wallet_path`` argument) names a wallet that is missing,
+    unreadable, or malformed. The plugin refuses to silently sign with
+    an auto-generated wallet under a different identity — operator
+    intent must not be silently overridden, since proofs would land
+    on-chain under the wrong address with no programmatic signal.
+    """
+
+
 class ArweaveAnchor:
     """Upload proof payloads to Arweave via Turbo SDK."""
 
@@ -41,9 +53,16 @@ class ArweaveAnchor:
 
         try:
             from turbo_sdk import ArweaveSigner, Turbo
+        except ImportError as e:
+            logger.warning(f"turbo-sdk not available; Arweave anchoring disabled: {e}")
+            return
 
-            jwk, mode = self._load_or_create_wallet(wallet_path)
+        # Wallet loading: caller-intent violations (bad ``wallet_path``)
+        # raise WalletLoadError and propagate. Default-path failures
+        # degrade to ephemeral inside _load_or_create_wallet.
+        jwk, mode = self._load_or_create_wallet(wallet_path)
 
+        try:
             self._signer = ArweaveSigner(jwk)
             turbo = Turbo(self._signer)
             self._upload_url = turbo.upload_url
@@ -65,8 +84,10 @@ class ArweaveAnchor:
                     f"wallet is in-memory only and will rotate on restart. "
                     f"Persistent wallet path {DEFAULT_WALLET_PATH} was not writable."
                 )
-        except Exception as e:
-            logger.warning(f"Failed to initialize Arweave anchor: {e}")
+        except Exception as e:  # noqa: BLE001 — Turbo signer/transport init failure: degrade to disabled
+            logger.warning(f"Failed to initialize Turbo signer: {e}")
+            self._signer = None
+            self.enabled = False
 
     def _build_default_tags(
         self,
@@ -148,28 +169,42 @@ class ArweaveAnchor:
         Resolution order:
 
         1. Caller-supplied ``wallet_path`` (or ``ARIO_MLFLOW_ARWEAVE_WALLET``)
-           — validate and use if well-formed; otherwise log a warning and
-           fall through to (2).
-        2. ``DEFAULT_WALLET_PATH`` — if it already exists, reuse it; if it
-           doesn't, generate a new wallet and persist it there.
+           — the wallet MUST be loadable from that path. Missing file,
+           unreadable file, malformed JSON, or incomplete JWK all raise
+           :class:`WalletLoadError`. The plugin refuses to silently
+           substitute an auto-generated wallet when the operator
+           explicitly named one.
+        2. ``DEFAULT_WALLET_PATH`` — if it already exists and is
+           well-formed, reuse it; if missing or malformed, generate a
+           new wallet and persist it there.
         3. If step (2)'s filesystem write fails, fall back to a pure
            in-memory wallet (``ephemeral`` mode).
         """
-        if wallet_path and os.path.exists(wallet_path):
+        if wallet_path:
             try:
                 with open(wallet_path) as f:
                     jwk = json.load(f)
-                if not isinstance(jwk, dict) or not _REQUIRED_JWK_FIELDS.issubset(jwk):
-                    raise ValueError("wallet file is not a complete RSA JWK")
-                return jwk, WALLET_MODE_USER
-            except (OSError, json.JSONDecodeError, ValueError) as e:
-                logger.warning(
-                    f"Invalid Arweave wallet at {wallet_path}: {e}; "
-                    f"falling back to auto-generated wallet"
+            except FileNotFoundError as e:
+                raise WalletLoadError(
+                    f"Arweave wallet path was supplied but file does not exist: "
+                    f"{wallet_path}"
+                ) from e
+            except OSError as e:
+                raise WalletLoadError(
+                    f"Could not read Arweave wallet at {wallet_path}: {e}"
+                ) from e
+            except json.JSONDecodeError as e:
+                raise WalletLoadError(
+                    f"Arweave wallet at {wallet_path} is not valid JSON: {e}"
+                ) from e
+            if not isinstance(jwk, dict) or not _REQUIRED_JWK_FIELDS.issubset(jwk):
+                raise WalletLoadError(
+                    f"Arweave wallet at {wallet_path} is not a complete RSA JWK "
+                    f"(missing one or more of: {sorted(_REQUIRED_JWK_FIELDS)})"
                 )
+            return jwk, WALLET_MODE_USER
 
-        # No user-configured wallet (or it was invalid). Try to reuse or
-        # create a persistent one.
+        # No user-configured wallet. Try to reuse or create a persistent one.
         if os.path.exists(DEFAULT_WALLET_PATH):
             try:
                 with open(DEFAULT_WALLET_PATH) as f:

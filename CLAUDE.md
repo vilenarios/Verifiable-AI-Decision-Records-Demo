@@ -24,6 +24,33 @@ When deciding where new behavior should live, default to the plugin. The demo on
 | What shipped? | `git log --oneline -20` + `docs/plans/archived/` |
 | Plugin's standalone docs | `ario_mlflow/README.md` |
 
+## Commands
+
+```bash
+# Install (editable plugin + demo deps)
+pip install -r requirements.txt && pip install -e .
+
+# Demo dev server (auto-reload)
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Train a model outside the demo flow (auto-trains on first prediction otherwise)
+python scripts/train_model.py
+
+# Tests
+pytest                                          # full suite
+pytest tests/test_plugin_verify.py              # one file
+pytest tests/test_plugin_verify.py::test_name   # one test
+pytest -k tamper                                # by keyword
+
+# Plugin CLI (installed by setup.py as `ario-mlflow`)
+ario-mlflow verify run <run_id>
+ario-mlflow verify model <name>/<version>
+ario-mlflow verify trace <trace_id>
+ario-mlflow audit <name>/<version>
+```
+
+The plugin registers an MLflow `RunContextProvider` entry point — importing `ario_mlflow` is enough to auto-tag runs; the rich proof layer requires an explicit `anchor()` inside the run.
+
 ## Conventions
 
 - **Plugin-first.** Any new verification capability lands in `ario_mlflow/` first; the demo wraps it. CLI flags, env vars, and verification semantics belong in the plugin so external `pip install ario-mlflow` users get the same capability.
