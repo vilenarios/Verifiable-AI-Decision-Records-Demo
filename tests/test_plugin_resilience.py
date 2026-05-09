@@ -153,6 +153,49 @@ def test_fetch_proof_returns_none_when_all_gateways_fail():
     assert a._session.get.call_count == 2
 
 
+def test_fetch_proof_falls_over_when_gateway_returns_non_json():
+    """A 200 with garbage body shouldn't crash the calling thread —
+    treat it as a gateway failure and try the next one. Regression
+    fix: the resp.json() call was uncaught when the except clause
+    only matched RequestException."""
+    a = ArweaveAnchor(gateways=["bad-json.com", "g2.com"])
+    expected = {"event_id": "z"}
+
+    bad_resp = MagicMock()
+    bad_resp.status_code = 200
+    bad_resp.raise_for_status = MagicMock()
+    bad_resp.json.side_effect = ValueError("not json")
+
+    def get_side_effect(url, **kwargs):
+        if "bad-json.com" in url:
+            return bad_resp
+        return _ok_response(expected)
+
+    a._session = MagicMock()
+    a._session.get.side_effect = get_side_effect
+
+    out = a.fetch_proof("TX-bad-json")
+
+    assert out == expected
+    assert a._session.get.call_count == 2
+
+
+def test_check_status_returns_unknown_on_non_json_response():
+    """``check_status`` must return a dict for every code path —
+    including when Turbo returns 200 with a non-JSON body. Regression
+    fix mirrors fetch_proof: ValueError used to escape."""
+    a = ArweaveAnchor()
+    bad_resp = MagicMock()
+    bad_resp.status_code = 200
+    bad_resp.json.side_effect = ValueError("not json")
+    a._session = MagicMock()
+    a._session.get.return_value = bad_resp
+
+    out = a.check_status("TX-bad")
+
+    assert out == {"status": "UNKNOWN"}
+
+
 def test_fetch_proof_with_no_gateways_returns_none():
     """Defensive — if a caller somehow constructs an anchor with an
     empty gateway list, fetch must surface the misconfiguration via

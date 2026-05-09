@@ -446,6 +446,10 @@ class ArweaveAnchor:
             try:
                 resp = self._session.get(url, timeout=30)
                 resp.raise_for_status()
+                # ValueError from resp.json() (gateway returned 200 with
+                # non-JSON body) is treated as a gateway failure, not a
+                # caller-side bug — fall over to the next gateway.
+                parsed = resp.json()
                 if gateway != self.gateways[0]:
                     # Surface the fact that we failed over so ops can
                     # see it in logs without parsing every request.
@@ -453,8 +457,8 @@ class ArweaveAnchor:
                         f"Fetched {tx_id} from fallback gateway {gateway} "
                         f"after primary {self.gateways[0]} failed"
                     )
-                return resp.json()
-            except requests.exceptions.RequestException as e:
+                return parsed
+            except (requests.exceptions.RequestException, ValueError) as e:
                 errors.append(f"{gateway}: {type(e).__name__}: {e}")
                 logger.warning(
                     f"Gateway {gateway} failed for tx {tx_id}: {type(e).__name__}: {e}"
@@ -482,9 +486,11 @@ class ArweaveAnchor:
                 f"https://turbo.ardrive.io/tx/{tx_id}/status", timeout=10
             )
             if resp.status_code == 200:
+                # ValueError if the response isn't JSON — handled below
+                # alongside transport errors so callers always get a dict.
                 data = resp.json()
                 return {"status": data.get("status", "UNKNOWN"), "info": data.get("info")}
             return {"status": "NOT_FOUND"}
-        except requests.exceptions.RequestException as e:
+        except (requests.exceptions.RequestException, ValueError) as e:
             logger.error(f"Failed to check Turbo status for {tx_id}: {type(e).__name__}: {e}")
             return {"status": "UNKNOWN"}
