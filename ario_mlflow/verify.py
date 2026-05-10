@@ -71,6 +71,32 @@ class LiveRefetchError(Exception):
     """
 
 
+def _fetch_trace_tags(mlflow_client, trace_id):
+    """Fetch a trace's metadata + tags without loading its spans.
+
+    Background: the prediction refetcher only needs the trace's tags
+    (specifically ``ario.payload_json``) to re-derive the canonical
+    bytes for verify-check 3. The full ``Trace`` object — fetched via
+    ``mlflow_client.get_trace(trace_id)`` — additionally loads the
+    trace's spans from its artifact repository, which on MLflow 3.x
+    requires ``mlflow.artifactLocation`` to be present in the trace's
+    tags. Some MLflow 3.x backend modes don't set that tag, and the
+    spans-load step then raises ``Unable to determine trace artifact
+    location`` — even though our caller never touches the spans.
+
+    This helper prefers the lighter ``_tracing_client.get_trace_info``
+    path (returns a ``TraceInfo`` with tags, no spans → no artifact
+    lookup) and falls back to the public ``get_trace`` for older
+    MLflow versions where the private tracing client isn't accessible.
+    The downstream code in ``_refetch_prediction_live_fields`` handles
+    both shapes (``Trace.info.tags`` and ``TraceInfo.tags``).
+    """
+    tracing_client = getattr(mlflow_client, "_tracing_client", None)
+    if tracing_client is not None and hasattr(tracing_client, "get_trace_info"):
+        return tracing_client.get_trace_info(trace_id)
+    return mlflow_client.get_trace(trace_id)
+
+
 # Per-event-type contracts for what fields the refetcher MUST produce.
 # A refetcher that can't produce all of these is treated as a failure
 # (raises LiveRefetchError); the silent-skip behaviour from before
@@ -241,19 +267,20 @@ def _refetch_prediction_live_fields(payload: dict, mlflow_client) -> dict:
         )
 
     try:
-        trace = mlflow_client.get_trace(trace_id)
-    except Exception as e:  # noqa: BLE001
+        trace = _fetch_trace_tags(mlflow_client, trace_id)
+    except Exception as e:  # noqa: BLE001 — wraps both the lite + fallback paths; LiveRefetchError surfaces as live_refetch_incomplete to the caller
         raise LiveRefetchError(
             f"could not fetch trace {trace_id}: {e}"
         ) from e
 
-    # Trace tags live under .info.tags in the MLflow Trace object.
+    # Tags live under .info.tags on Trace objects (returned by get_trace)
+    # and directly under .tags on TraceInfo objects (returned by
+    # get_trace_info — our preferred path on MLflow 3.x). Handle both.
     tags = {}
     info = getattr(trace, "info", None)
     if info is not None and getattr(info, "tags", None):
         tags = dict(info.tags)
     elif getattr(trace, "tags", None):
-        # Defensive: some backend versions surface tags directly on trace.
         tags = dict(trace.tags)
 
     payload_json_tag = tags.get("ario.payload_json")

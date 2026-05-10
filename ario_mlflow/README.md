@@ -21,11 +21,11 @@ Python 3.10+. Pulls in MLflow, PyNaCl, the ar.io Turbo SDK, and `cryptography`.
 
 ### MLflow version compatibility
 
-Tested against MLflow 2.14 through 2.x. MLflow 3.x **mostly works** but has one
-known issue: the prediction-side `verify_source_of_truth` check can return
-`live_refetch_incomplete` because MLflow 3.x changed how trace artifact
-locations are resolved. Training and registration verification are unaffected.
-If you're on MLflow 3.x, expect that specific check to be stricter than on 2.x.
+Tested against MLflow 2.14 through 3.x. The plugin's prediction-side
+`verify_source_of_truth` reads trace tags directly via the lighter
+`_tracing_client.get_trace_info` API, sidestepping MLflow 3.x's stricter
+`mlflow.artifactLocation` requirement on `client.get_trace()`. Training,
+registration, and prediction verification all work on either major version.
 
 ## Quickstart
 
