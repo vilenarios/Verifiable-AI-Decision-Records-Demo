@@ -79,10 +79,17 @@ resilience pass. Not yet published to PyPI.
   no verify URL is configured, the CLI command stands alone in generated
   HTML reports instead of pointing at a personal endpoint.
 
-### Known limitations
+### Fixed
 
 - **MLflow 3.x prediction verification** — the prediction-side
-  `verify_source_of_truth` check returns `live_refetch_incomplete` because
-  MLflow 3.x changed how trace artifact locations are resolved. Training
-  and registration verification are unaffected on 3.x. Investigation
-  scheduled.
+  `verify_source_of_truth` previously returned `live_refetch_incomplete`
+  on MLflow 3.x because `client.get_trace()` requires
+  `mlflow.artifactLocation` in trace tags to load spans, and MLflow 3.x
+  doesn't always set that tag. The refetcher now uses
+  `_tracing_client.get_trace_info()` (tags-only, no spans load), which
+  works on both MLflow 2.x and 3.x. Training and registration
+  verification were never affected.
+
+### Known limitations
+
+(none currently tracked — open an issue if you hit one)
