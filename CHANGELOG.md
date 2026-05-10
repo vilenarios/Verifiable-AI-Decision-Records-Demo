@@ -46,9 +46,6 @@ Initial alpha release. Not yet published to PyPI; install from source via
 
 ### Known limitations
 
-- Auto-generated Arweave wallet starts unfunded; anchoring degrades to
-  signed-only until the wallet is funded. See "Wallet funding" in the
-  plugin README.
 - MLflow 3.x: prediction-side `verify_source_of_truth` may return
   `live_refetch_incomplete` due to changed trace artifact location handling
   in 3.x. Training and registration verification are unaffected.

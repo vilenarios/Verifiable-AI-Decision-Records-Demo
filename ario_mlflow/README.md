@@ -43,14 +43,18 @@ with mlflow.start_run():
     mlflow.sklearn.log_model(model, "model")
 
     # Signs a proof, hashes the logged artifacts, writes ario.* tags,
-    # and (if anchoring is enabled) uploads to Arweave.
-    result = ario_mlflow.anchor()
+    # and uploads ~500 bytes to Arweave via Turbo (free for small payloads).
+    # allow_empty_dataset_inputs=True opts out of dataset anchoring; see
+    # "Dataset anchoring" below for the recommended pattern.
+    result = ario_mlflow.anchor(allow_empty_dataset_inputs=True)
     print(result["tags"]["ario.training_tx"])
 ```
 
 No wallet configured? The plugin auto-generates one on first run and persists it
 to `~/.ario-mlflow/wallet.json` so your signing address stays stable across
 sessions. Set `ARIO_MLFLOW_ARWEAVE_WALLET=/path/to/wallet.json` to use your own.
+The auto-generated wallet starts unfunded — that's fine for typical usage
+because Turbo's free tier covers small uploads (see "Wallet & cost" below).
 
 A full runnable example lives in `examples/sklearn-quickstart/`.
 
@@ -184,35 +188,25 @@ The standalone-dataset envelope commits to the dataset's name, source URI,
 digest, and schema hash — not to its rows. Datasets stay private; the
 commitment is portable.
 
-## Wallet funding
-
-The auto-generated wallet starts with **zero balance**. Without funding, the
-plugin still signs envelopes locally but every Arweave upload fails — your
-runs will keep working but `ario.training_tx` won't appear and the verify
-status stays `signed` instead of `anchored`.
-
-To fund it:
-
-1. Find your auto-generated wallet at `~/.ario-mlflow/wallet.json` (or
-   wherever `ARIO_MLFLOW_ARWEAVE_WALLET` points).
-2. Read the wallet's address — the plugin logs it on first use, e.g.
-   `wallet: <address>, mode=persistent`.
-3. Top up via [Turbo](https://ardrive.io/turbo) (credit-card top-up) or any
-   AR transfer to that address.
-4. Confirm the balance via the Turbo SDK or [viewblock.io](https://viewblock.io/arweave).
-
-**For production deployments**, generate a dedicated wallet, set
-`ARIO_MLFLOW_ARWEAVE_WALLET=/path/to/your/wallet.json`, and monitor the
-balance — there is no built-in alert when it runs low.
-
-## Cost
+## Wallet & cost
 
 Each anchored event is a ~500-byte signed commitment (bounded 400–700 bytes by
-the plugin's smoke test). At Turbo's current pricing, that's a fraction of a
-cent per anchor; check [Turbo's pricing page](https://ardrive.io/turbo) for
-exact figures. Source data (params, metrics, artifact bytes) stays in MLflow —
-nothing else goes on chain — so costs are flat regardless of how big your
-training run was.
+the plugin's smoke test). **Turbo's free tier covers uploads under 105 KiB**,
+so typical usage is free — the auto-generated wallet works out of the box
+with zero balance, and most teams never need to fund it.
+
+You'd only need to fund the wallet if you're hitting Turbo's per-account
+free-tier limits or anchoring larger payloads. To top up:
+
+- Visit [console.ar.io](https://console.ar.io) — credit-card or crypto top-up
+  for the wallet address logged by the plugin on first use
+  (`wallet: <address>, mode=persistent`).
+
+**For production deployments**, generate a dedicated wallet (don't rely on the
+auto-generated one), set `ARIO_MLFLOW_ARWEAVE_WALLET=/path/to/your/wallet.json`,
+and treat the wallet like any other production secret. Source data (params,
+metrics, artifact bytes) always stays in MLflow — nothing else goes on chain —
+so costs are flat regardless of how big your training run was.
 
 ## Network requirements
 
