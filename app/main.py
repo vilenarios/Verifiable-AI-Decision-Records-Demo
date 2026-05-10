@@ -255,7 +255,20 @@ async def lifespan(app: FastAPI):
     # Arweave anchor — initialised BEFORE load_model so the demo's
     # signing key + wallet are threaded through to VerifiedModel and
     # any auto-train fallback path. (Phase 2.B)
-    app.state.anchor = ArweaveAnchor(settings.arweave_wallet_path, settings.ario_gateway_host)
+    #
+    # Pass wallet_path only when the file actually exists. The plugin's
+    # ArweaveAnchor treats a non-empty path as caller intent and raises
+    # WalletLoadError if the file is missing or malformed (so production
+    # operators get a loud signal). For the demo, the default path
+    # (``keys/arweave_wallet.json``) is "use this if present, otherwise
+    # auto-generate" — we coerce that to None when the file is absent
+    # so a fresh local checkout boots without a wallet.
+    arweave_wallet = (
+        settings.arweave_wallet_path
+        if os.path.exists(settings.arweave_wallet_path)
+        else None
+    )
+    app.state.anchor = ArweaveAnchor(arweave_wallet, settings.ario_gateway_host)
 
     # MLflow model — load_model now returns a VerifiedModel alongside
     # the raw sklearn estimator. The sklearn one is used for the UI's
