@@ -35,12 +35,16 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.datasets import load_iris
 import ario_mlflow
 
+# Point MLflow at a tracking store. Skip if MLFLOW_TRACKING_URI is
+# already set in your env, or if you're happy with the cwd's ./mlruns.
+mlflow.set_tracking_uri("file:///tmp/mlruns")
+
 X, y = load_iris(return_X_y=True)
 
 with mlflow.start_run():
     model = LogisticRegression(max_iter=200).fit(X, y)
     mlflow.log_metric("accuracy", model.score(X, y))
-    mlflow.sklearn.log_model(model, "model")
+    mlflow.sklearn.log_model(model, name="model")
 
     # Signs a proof, hashes the logged artifacts, writes ario.* tags,
     # and uploads ~500 bytes to Arweave via Turbo (free for small payloads).
@@ -244,7 +248,7 @@ asynchronously and writes back to the trace tags when it completes.
 | `ARIO_MLFLOW_ARWEAVE_WALLET` | Path to an Arweave JWK wallet file | auto-generates + persists at `~/.ario-mlflow/wallet.json` |
 | `ARIO_MLFLOW_GATEWAY_HOST` | ar.io gateway for uploads & fetches | `turbo-gateway.com` |
 | `ARIO_MLFLOW_SIGNING_KEY` | Base64-encoded Ed25519 seed | auto-generates at `~/.ario-mlflow/keys/` |
-| `ARIO_MLFLOW_ARIO_VERIFY_URL` | ar.io Verify REST API base URL | ar.io attestation disabled if unset |
+| `ARIO_MLFLOW_ARIO_VERIFY_URL` | ar.io Verify REST API base URL — e.g. `https://perma.online/local/verify` (an ar.io operator's Verify endpoint) | ar.io attestation disabled if unset |
 
 ## Tags the plugin writes
 
@@ -291,6 +295,11 @@ ario-mlflow verify model <name>/<version>        # verify registration proof
 ario-mlflow verify trace <trace_id>              # verify an inference proof
 ario-mlflow audit <name>/<version>               # full model-lineage audit
 ```
+
+The CLI reads `MLFLOW_TRACKING_URI` (default `./mlruns`) — export it to point
+at the same store you used at training time, otherwise the run lookup will
+fail with `Run '<id>' not found`. Set `ARIO_MLFLOW_ARIO_VERIFY_URL` to enable
+the optional ar.io attestation row.
 
 All `verify` commands run the same three-row verify flow plus the optional
 ar.io attestation:
