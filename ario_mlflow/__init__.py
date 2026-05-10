@@ -10,6 +10,9 @@ Public API:
   auto-anchors registration and promotion events.
 - :class:`IntegrityError` — raised by ``VerifiedModel`` when artifact
   integrity fails.
+- :class:`WalletLoadError` — raised when a caller-supplied Arweave
+  wallet path cannot be loaded. The plugin refuses to silently sign
+  with an auto-generated wallet under a different identity.
 - :func:`verify_signature`, :func:`verify_anchored_bytes`,
   :func:`verify_source_of_truth`, :func:`verify_ario_attestation`,
   :func:`full_verify` — the four-check verification helpers. Re-exported
@@ -27,6 +30,8 @@ Public API:
 - :class:`ArioVerifyClient` — ar.io Verify REST client.
 """
 
+__version__ = "0.1.0"
+
 
 def __getattr__(name):
     if name == "anchor":
@@ -38,6 +43,9 @@ def __getattr__(name):
     if name == "IntegrityError":
         from ario_mlflow.model import IntegrityError
         return IntegrityError
+    if name == "WalletLoadError":
+        from ario_mlflow.arweave import WalletLoadError
+        return WalletLoadError
     if name == "ArioMlflowClient":
         from ario_mlflow.client import ArioMlflowClient
         return ArioMlflowClient
@@ -57,9 +65,11 @@ def __getattr__(name):
 
 
 __all__ = [
+    "__version__",
     "anchor",
     "VerifiedModel",
     "IntegrityError",
+    "WalletLoadError",
     "ArioMlflowClient",
     "verify_signature",
     "verify_anchored_bytes",
